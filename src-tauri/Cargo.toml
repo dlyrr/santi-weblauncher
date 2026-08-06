@@ -1,6 +1,6 @@
 [package]
 name = "santi-weblauncher"
-version = "1.4.0"
+version = "1.5.0"
 description = "Roblox bootstrapper that pins the channel and version you choose"
 authors = ["santi (dlyrr)"]
 edition = "2021"

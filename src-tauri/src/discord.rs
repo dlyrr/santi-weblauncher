@@ -126,12 +126,24 @@ impl DiscordIpc {
         self.send(OP_HANDSHAKE, &handshake)
             .context("sending the Discord handshake")?;
 
-        // Discord replies with READY; a refusal shows up as a closed pipe on the
-        // next write, which reconnect handling already covers.
-        let _ = self.read_frame();
+        // Discord replies READY, or closes the pipe if it refuses the client id.
+        match self.read_frame() {
+            Ok(ready) => {
+                if ready["evt"].as_str() == Some("ERROR") {
+                    self.pipe = None;
+                    let message = ready["data"]["message"].as_str().unwrap_or("handshake refused");
+                    bail!("Discord refused the connection: {message}");
+                }
+            }
+            Err(err) => {
+                self.pipe = None;
+                return Err(err).context("reading Discord's handshake reply");
+            }
+        }
 
-        // Anything set before a reconnect should survive it.
-        if let Some(activity) = self.last.clone() {
+        // Anything set before a reconnect should survive it. `last` has to be
+        // cleared first or set_activity would treat it as a no-op.
+        if let Some(activity) = self.last.take() {
             let _ = self.set_activity(&activity);
         }
 
@@ -197,19 +209,43 @@ impl DiscordIpc {
             }
         });
 
-        let result = self.send(OP_FRAME, &payload);
-        if result.is_ok() {
-            self.last = Some(activity.clone());
-        } else {
-            // A broken pipe means Discord went away; drop it so the next tick
-            // reconnects instead of failing forever.
-            self.pipe = None;
+        match self.command(&payload) {
+            Ok(reply) => {
+                // Discord reports a rejected payload in the frame, not at the
+                // socket level, so a write that "succeeded" can still have been
+                // thrown away.
+                if reply["evt"].as_str() == Some("ERROR") {
+                    let message = reply["data"]["message"].as_str().unwrap_or("unknown reason");
+                    bail!("Discord rejected the activity: {message}");
+                }
+                self.last = Some(activity.clone());
+                Ok(())
+            }
+            Err(err) => {
+                // A broken pipe means Discord went away; drop it so the next
+                // tick reconnects instead of failing forever.
+                self.pipe = None;
+                Err(err)
+            }
         }
-        result
+    }
+
+    /// Send a frame and consume its reply.
+    ///
+    /// Discord answers every frame. Writing without reading leaves those replies
+    /// in the pipe, and a long-running session eventually fills the buffer and
+    /// blocks on a write that looks like a hang.
+    fn command(&mut self, payload: &Value) -> Result<Value> {
+        self.send(OP_FRAME, payload)?;
+        self.read_frame()
     }
 
     /// Remove the presence without dropping the connection.
     pub fn clear_activity(&mut self) -> Result<()> {
+        if self.last.is_none() && self.is_connected() {
+            return Ok(());
+        }
+
         let payload = json!({
             "cmd": "SET_ACTIVITY",
             "nonce": nonce(),
@@ -217,20 +253,22 @@ impl DiscordIpc {
         });
 
         self.last = None;
-        let result = self.send(OP_FRAME, &payload);
-        if result.is_err() {
-            self.pipe = None;
+        match self.command(&payload) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                self.pipe = None;
+                Err(err)
+            }
         }
-        result
     }
 
     /// Cheap liveness probe, so a dead pipe is noticed between game events.
     pub fn ping(&mut self) -> Result<()> {
-        let result = self.send(OP_PING, &json!({}));
+        let result = self.send(OP_PING, &json!({})).and_then(|()| self.read_frame());
         if result.is_err() {
             self.pipe = None;
         }
-        result
+        result.map(|_| ())
     }
 }
 
@@ -253,4 +291,57 @@ fn nonce() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     format!("santi-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Talks to the Discord client actually running on this machine.
+    ///
+    /// Ignored by default because it needs Discord open. Run with:
+    ///   cargo test --lib discord -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn handshake_and_set_activity_against_real_discord() {
+        let mut ipc = DiscordIpc::new(crate::DISCORD_APP_ID);
+
+        ipc.connect().expect("connecting to Discord");
+        assert!(ipc.is_connected(), "pipe should be open after connect");
+
+        // connect() consumes the READY frame, so probe the link with a ping and
+        // read what comes back.
+        ipc.ping().expect("ping round trip");
+        println!("ping round-tripped");
+
+        let activity = Activity {
+            details: Some("santi.weblauncher self-test".into()),
+            state: Some("verifying rich presence".into()),
+            small_text: Some("santi.weblauncher".into()),
+            start: Some(1_785_000_000),
+            buttons: vec![("See game page".into(), "https://www.roblox.com/games/1818".into())],
+            ..Default::default()
+        };
+
+        // set_activity now consumes its own reply and turns a rejection into an
+        // Err, so a plain expect() is the whole assertion.
+        ipc.set_activity(&activity).expect("Discord accepted the activity");
+        println!("activity accepted");
+
+        std::thread::sleep(std::time::Duration::from_secs(3));
+
+        ipc.clear_activity().expect("clearing the activity");
+        println!("activity cleared");
+
+        // Prove the pipe is still usable after several round trips — the bug
+        // this guards against only shows up once replies pile up unread.
+        for i in 0..5 {
+            let a = Activity { details: Some(format!("round trip {i}")), ..Default::default() };
+            ipc.set_activity(&a).expect("repeated updates keep working");
+        }
+        println!("5 further updates round-tripped cleanly");
+        ipc.clear_activity().ok();
+
+        ipc.disconnect();
+    }
 }

@@ -603,3 +603,28 @@ input, textarea { user-select: text; }
     transition: width var(--base) var(--ease);
 }
 .update__status { margin-top: 8px; font-size: 11.5px; color: var(--description); font-family: var(--mono); }
+
+/* ── Theme presets ──────────────────────────────────────────── */
+
+.presets { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 10px; }
+
+.preset {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 12px 7px 8px; border-radius: 100px;
+    border: 1px solid var(--line); background: var(--fill);
+    color: var(--description); font-size: 12px; cursor: pointer; white-space: nowrap;
+    transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
+                color var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+.preset:hover { color: var(--text); border-color: color-mix(in srgb, var(--glass) 20%, transparent); transform: translateY(-1px); }
+.preset:active { transform: translateY(0) scale(.97); transition-duration: .06s; }
+.preset[aria-pressed="true"] {
+    border-color: var(--accent); color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.preset__dots { display: inline-flex; gap: 2px; flex-shrink: 0; }
+.preset__dots i {
+    width: 9px; height: 9px; border-radius: 50%; display: block;
+    border: 1px solid color-mix(in srgb, var(--glass) 14%, transparent);
+}

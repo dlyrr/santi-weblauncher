@@ -315,6 +315,26 @@ const FLAG_PRESETS = [
     { flag: "FFlagDisablePostFx", title: "Disable Post FX", desc: "Turn off post-processing effects", kind: "bool" },
 ];
 
+/*
+    Theme presets imported from WEAO (https://weao.xyz).
+
+    WEAO's tokens are mostly translucent, layered over the page background. The
+    launcher paints with solid colours and derives its own translucency from
+    `glass`, so each token is composited over its theme's background here rather
+    than carried across as rgba.
+*/
+const WEAO_PRESETS = [
+    { id: "dark", name: "Dark", theme: { background: "#1a1a1a", surface: "#1a1a1a", glass: "#ffffff", text: "#ffffff", description: "#767676", buttons: "#a3a3a3", inputs: "#d1d1d1", accent: "#3bea57", loading: "#3bea57", danger: "#ec3b47" } },
+    { id: "light", name: "Light", theme: { background: "#f5f5f5", surface: "#ffffff", glass: "#121212", text: "#121212", description: "#939393", buttons: "#626262", inputs: "#313131", accent: "#3bea57", loading: "#3bea57", danger: "#ec3b47" } },
+    { id: "revision", name: "Revision", theme: { background: "#0f0f14", surface: "#0f0f14", glass: "#e0e0e0", text: "#e0e0e0", description: "#636366", buttons: "#8c8c8e", inputs: "#b6b6b7", accent: "#3bea57", loading: "#3bea57", danger: "#ec3b47" } },
+    { id: "voxlis", name: "voxlis.NET", theme: { background: "#000000", surface: "#000000", glass: "#ffffff", text: "#ffffff", description: "#666666", buttons: "#999999", inputs: "#cccccc", accent: "#dc2626", loading: "#dc2626", danger: "#dc2626" } },
+    { id: "pulsery", name: "Pulsery", theme: { background: "#0a0a0f", surface: "#0a0a0f", glass: "#ffffff", text: "#ffffff", description: "#6c6c6f", buttons: "#9d9d9f", inputs: "#cececf", accent: "#6366f1", loading: "#6366f1", danger: "#6366f1" } },
+    { id: "amoled", name: "Amoled", theme: { background: "#000000", surface: "#000000", glass: "#ffffff", text: "#ffffff", description: "#535353", buttons: "#7d7d7d", inputs: "#a6a6a6", accent: "#808080", loading: "#808080", danger: "#808080" } },
+    { id: "kyoto", name: "Kyoto", theme: { background: "#171821", surface: "#171821", glass: "#d1d9f9", text: "#d1d9f9", description: "#333440", buttons: "#414350", inputs: "#4f515f", accent: "#b8bed7", loading: "#d1d9f9", danger: "#d1d9f9" } },
+    { id: "sirmeme", name: "Sirmeme", theme: { background: "#000000", surface: "#000000", glass: "#ffffff", text: "#ffffff", description: "#666666", buttons: "#999999", inputs: "#cccccc", accent: "#ff00d8", loading: "#ff00d8", danger: "#35ff03" } },
+    { id: "ball20", name: "Ball 2.0", theme: { background: "#ffffff", surface: "#ffffff", glass: "#000000", text: "#000000", description: "#999999", buttons: "#666666", inputs: "#333333", accent: "#000000", loading: "#000000", danger: "#000000" } },
+];
+
 const THEME_KEYS = [
     ["background", "Background", "Main app background color"],
     ["surface", "Surface", "Dialog and card background"],
@@ -950,6 +970,43 @@ function renderSettings() {
     }
 
     if (activeTab === "themes") {
+        pane.append(groupLabel("Presets"));
+
+        const presetRow = document.createElement("div");
+        presetRow.className = "presets";
+
+        for (const preset of WEAO_PRESETS) {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = "preset";
+
+            const dots = document.createElement("span");
+            dots.className = "preset__dots";
+            for (const colour of [preset.theme.background, preset.theme.surface, preset.theme.accent, preset.theme.danger]) {
+                const dot = document.createElement("i");
+                dot.style.background = colour;
+                dots.append(dot);
+            }
+
+            const label = document.createElement("span");
+            label.textContent = preset.name;
+            chip.append(dots, label);
+
+            // A preset only sets colours — grid, scale and background image
+            // are the user's own choices and are left alone.
+            bind(() => {
+                const t = snap.settings.theme;
+                const match = Object.entries(preset.theme).every(([k, v]) => t[k] === v);
+                chip.setAttribute("aria-pressed", String(match));
+            });
+
+            chip.addEventListener("click", () => setTheme({ ...preset.theme }));
+            presetRow.append(chip);
+        }
+
+        pane.append(presetRow);
+        pane.append(groupLabel("Colors"));
+
         for (const [key, title, desc] of THEME_KEYS) {
             const swatch = document.createElement("button");
             swatch.className = "swatch";

@@ -30,7 +30,7 @@ use config::{Profile, Settings, Theme};
 use deploy::{BinaryType, InstallProgress, VersionInfo};
 
 /// The Discord application this launcher presents itself as.
-const DISCORD_APP_ID: &str = "1534870843799375993";
+pub(crate) const DISCORD_APP_ID: &str = "1534870843799375993";
 
 /// Tauri commands must return a serialisable error, so anyhow gets flattened to
 /// its full context chain — losing the causes makes install failures unreadable.
@@ -795,26 +795,12 @@ fn spawn_activity_watcher(app: AppHandle) {
                 app.emit("activity", Value::Null).ok();
             }
 
-            if !presence {
-                if rpc.is_connected() {
-                    let _ = rpc.clear_activity();
-                    rpc.disconnect();
-                }
-                continue;
-            }
-
-            // Reconnect attempts are cheap but not free; retry every ~10s.
-            if !rpc.is_connected() && ticks % 5 == 0 {
-                let _ = rpc.connect();
-            }
-
-            if !rpc.is_connected() {
-                continue;
-            }
-
-            match watcher.session.clone() {
-                Some(session) if watcher.connected => {
-                    let mut presence = discord::Activity {
+            // Discord's pipe is blocking, so every interaction with it runs on
+            // the blocking pool. Doing it inline would park a runtime worker for
+            // the length of each round trip.
+            let target = match watcher.session.clone() {
+                Some(session) if watcher.connected && presence => {
+                    let mut activity = discord::Activity {
                         details: Some(session.name.clone().unwrap_or_else(|| "Playing Roblox".into())),
                         state: session.creator.clone().map(|c| format!("by {c}")),
                         large_image: session.icon.clone(),
@@ -824,21 +810,55 @@ fn spawn_activity_watcher(app: AppHandle) {
                         start: Some(session.started),
                         buttons: Vec::new(),
                     };
-
                     if buttons {
-                        presence.buttons.push(("See game page".into(), session.place_url()));
+                        activity.buttons.push(("See game page".into(), session.place_url()));
                     }
+                    Some(activity)
+                }
+                _ => None,
+            };
 
-                    let _ = rpc.set_activity(&presence);
+            let should_connect = presence && !rpc.is_connected() && ticks % 5 == 0;
+            let should_ping = presence && target.is_none() && ticks % 15 == 0;
+
+            let mut client = rpc;
+            client = tokio::task::spawn_blocking(move || {
+                if !presence {
+                    if client.is_connected() {
+                        let _ = client.clear_activity();
+                        client.disconnect();
+                    }
+                    return client;
                 }
-                _ => {
-                    let _ = rpc.clear_activity();
-                    // Keep the socket warm so the next join updates instantly.
-                    if ticks % 15 == 0 {
-                        let _ = rpc.ping();
+
+                // Retrying every tick would hammer the pipe while Discord is
+                // closed, so reconnects are attempted every ~10s.
+                if should_connect {
+                    if let Err(err) = client.connect() {
+                        eprintln!("discord: {err:#}");
                     }
                 }
-            }
+
+                if !client.is_connected() {
+                    return client;
+                }
+
+                match target {
+                    Some(activity) => { let _ = client.set_activity(&activity); }
+                    None => {
+                        let _ = client.clear_activity();
+                        if should_ping {
+                            let _ = client.ping();
+                        }
+                    }
+                }
+
+                client
+            })
+            .await
+            .unwrap_or_else(|_| discord::DiscordIpc::new(DISCORD_APP_ID));
+
+            rpc = client;
         }
     });
 }
