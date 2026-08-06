@@ -52,6 +52,39 @@ function toast(message, tone = null) {
     toastTimer = setTimeout(() => { el.hidden = true; }, 4200);
 }
 
+/* ── Window chrome ──────────────────────────────────────────── */
+
+/*
+    Native decorations are off, so the frame is ours: dragging, minimising and
+    the resize borders all have to be provided here.
+
+    Dragging is done manually rather than with `data-tauri-drag-region` because
+    that also maps double-click to maximise, which makes no sense for a launcher
+    laid out for a 460x300 window.
+*/
+const appWindow = getCurrentWindow();
+
+for (const region of document.querySelectorAll("[data-tauri-drag-region]")) {
+    region.addEventListener("pointerdown", (event) => {
+        // Only a plain left-press on empty chrome starts a drag.
+        if (event.button !== 0) return;
+        if (event.target.closest("button, input, select, a")) return;
+        appWindow.startDragging().catch(() => {});
+    });
+}
+
+for (const handle of document.querySelectorAll(".rz")) {
+    handle.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        appWindow.startResizeDragging(handle.dataset.dir).catch(() => {});
+    });
+}
+
+const minimise = () => appWindow.minimize().catch(() => {});
+$("minimizeApp").addEventListener("click", minimise);
+$("minimizeSettings").addEventListener("click", minimise);
+
 $("closeApp").addEventListener("click", () => invoke("hide_to_tray"));
 function openSettings() {
     $("settings").hidden = false;
@@ -68,22 +101,42 @@ $("openSettings").addEventListener("click", openSettings);
 $("closeSettings").addEventListener("click", closeSettings);
 
 document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !$("settings").hidden) closeSettings();
+    if (event.key !== "Escape") return;
+    if (!$("updateModal").hidden) { hideUpdateModal(); return; }
+    if (!$("outdatedModal").hidden) { $("outdatedModal").hidden = true; return; }
+    if (!$("settings").hidden) closeSettings();
 });
 
 /* ── Icons ──────────────────────────────────────────────────── */
 
 const ICONS = {
     launch: "M5.5 10.5 3 13l3 .5.5 3 2.5-2.5m-4-3.5L9 5a5.5 5.5 0 0 1 4.5-2.5A5.5 5.5 0 0 1 11 7l-5.5 4.5m0-1 1.5 1.5M9.5 6.5a1 1 0 1 0 2 0 1 1 0 0 0-2 0",
-    roblox: "M4 2.2 13.8 4.6 11.4 14.4 1.6 12l2.4-9.8Zm3 4.2-.8 3.2 3.2.8.8-3.2-3.2-.8Z",
     fflags: "M4 2v12M4 3h8l-1.5 2.5L12 8H4",
     protocol: "M6.5 9.5 4 12a2.5 2.5 0 0 1-3.5-3.5L3 6m6.5.5L12 4a2.5 2.5 0 0 1 3.5 3.5L13 10m-7-1 4-4",
     themes: "M5.5 10.5 3 13l3 .5.5 3 2.5-2.5m-4-3.5L9 5a5.5 5.5 0 0 1 4.5-2.5A5.5 5.5 0 0 1 11 7l-5.5 4.5",
     advanced: "M6.7 2.4 5.9 4a5.5 5.5 0 0 0-1.3.7l-1.7-.4-1.3 2.2 1.3 1.2a5.5 5.5 0 0 0 0 1.5L1.6 10.5l1.3 2.2 1.7-.4c.4.3.8.5 1.3.7l.8 1.6h2.6l.8-1.6c.5-.2.9-.4 1.3-.7l1.7.4 1.3-2.2-1.3-1.2a5.5 5.5 0 0 0 0-1.5l1.3-1.2-1.3-2.2-1.7.4a5.5 5.5 0 0 0-1.3-.7l-.8-1.6H6.7Z",
 };
 
+/*
+    The official Roblox mark, from Wikimedia Commons. It is a filled compound
+    path with an even-odd hole rather than a stroked outline, so it cannot go
+    through the stroked path used by every other icon.
+*/
+const ROBLOX_MARK = "M120.5,271.7c-110.9-28.6-120-31-119.9-31.5 C0.7,239.6,62.1,0.5,62.2,0.4c0,0,54,13.8,119.9,30.8s120,30.8,120.1,30.8c0.2,0,0.2,0.4,0.1,0.9c-0.2,1.5-61.5,239.3-61.7,239.5 C240.6,302.5,186.5,288.7,120.5,271.7z M174.9,158c3.2-12.6,5.9-23.1,6-23.4c0.1-0.5-2.3-1.2-23.2-6.6c-12.8-3.3-23.5-5.9-23.6-5.8 c-0.3,0.3-12.1,46.6-12,46.7c0.2,0.2,46.7,12.2,46.8,12.1C168.9,180.9,171.6,170.6,174.9,158L174.9,158z";
+
 function icon(name) {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+
+    if (name === "roblox") {
+        svg.setAttribute("viewBox", "0 0 302.7 302.7");
+        const mark = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        mark.setAttribute("d", ROBLOX_MARK);
+        mark.setAttribute("fill", "currentColor");
+        mark.setAttribute("fill-rule", "evenodd");
+        svg.append(mark);
+        return svg;
+    }
+
     svg.setAttribute("viewBox", "0 0 16 16");
     svg.setAttribute("fill", "none");
     svg.setAttribute("stroke", "currentColor");
@@ -1324,6 +1377,86 @@ $("outdatedModal").addEventListener("click", (event) => {
     rdd.xocat.online and each installer is minisign-signed, so an update can
     only install if it was built with our private key.
 */
+let pendingUpdate = null;
+
+function showUpdateModal(update) {
+    pendingUpdate = update;
+
+    $("updateFrom").textContent = `v${snap.app_version}`;
+    $("updateTo").textContent = `v${update.version}`;
+    $("updateNotes").textContent = (update.body || "").trim() || "No release notes were provided.";
+    $("updateBadge").textContent = "Update";
+    $("updateTitle").textContent = "A new version is available";
+
+    $("updateProgress").hidden = true;
+    $("updateFill").style.width = "0%";
+    $("updateLater").hidden = false;
+    $("updateNow").hidden = false;
+    $("updateNow").disabled = false;
+    $("updateNow").textContent = "Install and restart";
+
+    $("updateModal").hidden = false;
+}
+
+function hideUpdateModal() {
+    $("updateModal").hidden = true;
+    pendingUpdate = null;
+}
+
+$("updateLater").addEventListener("click", hideUpdateModal);
+
+$("updateNow").addEventListener("click", async () => {
+    if (!pendingUpdate) return;
+
+    $("updateNow").disabled = true;
+    $("updateNow").textContent = "Installing…";
+    $("updateLater").hidden = true;
+    $("updateProgress").hidden = false;
+
+    let total = 0;
+    let received = 0;
+
+    try {
+        await pendingUpdate.downloadAndInstall((event) => {
+            if (event.event === "Started") {
+                total = event.data.contentLength || 0;
+                $("updateStatus").textContent = total
+                    ? `Downloading ${(total / 1048576).toFixed(1)} MB…`
+                    : "Downloading…";
+            } else if (event.event === "Progress") {
+                received += event.data.chunkLength || 0;
+                // Without a content length there's nothing honest to show, so
+                // the bar creeps rather than pretending to know.
+                const pct = total ? Math.min((received / total) * 100, 100) : Math.min(received / 40000, 90);
+                $("updateFill").style.width = `${pct}%`;
+            } else if (event.event === "Finished") {
+                $("updateFill").style.width = "100%";
+                $("updateStatus").textContent = "Restarting…";
+            }
+        });
+
+        await window.__TAURI__.process.relaunch();
+    } catch (err) {
+        $("updateProgress").hidden = true;
+        $("updateBadge").textContent = "Failed";
+        $("updateTitle").textContent = "Update failed";
+        $("updateNotes").textContent = String(err);
+        $("updateLater").hidden = false;
+        $("updateLater").textContent = "Close";
+        $("updateNow").disabled = false;
+        $("updateNow").textContent = "Try again";
+    }
+});
+
+/*
+    Signed updates via the Tauri updater. The manifest lives on
+    rdd.xocat.online and each installer is minisign-signed, so an update can
+    only install if it was built with our private key.
+
+    `interactive` distinguishes the Advanced-tab button (which should say
+    something either way) from the startup check (which only speaks up when
+    there is genuinely an update).
+*/
 async function checkForUpdate(btn, interactive) {
     const { check } = window.__TAURI__.updater;
     const setLabel = (text) => { if (btn) btn.textContent = text; };
@@ -1331,46 +1464,17 @@ async function checkForUpdate(btn, interactive) {
     try {
         setLabel("Checking…");
         const update = await check();
+        setLabel("Check");
 
         if (!update) {
-            setLabel("Check");
             if (interactive) toast(`You're on the latest version (v${snap.app_version})`, "ok");
             return;
         }
 
-        if (interactive) {
-            const { ask } = window.__TAURI__.dialog;
-            const go = await ask(
-                `Version ${update.version} is available. Install it now? The launcher will restart.`,
-                { title: "Update available", kind: "info", okLabel: "Install", cancelLabel: "Later" }
-            );
-            if (!go) { setLabel("Check"); return; }
-        }
-
-        setLabel("Updating…");
-        $("progressLine").hidden = false;
-        $("progressLabel").textContent = `Downloading v${update.version}…`;
-
-        let total = 0;
-        let received = 0;
-        await update.downloadAndInstall((event) => {
-            if (event.event === "Started") {
-                total = event.data.contentLength || 0;
-            } else if (event.event === "Progress") {
-                received += event.data.chunkLength || 0;
-                const pct = total ? Math.min((received / total) * 100, 100) : 40;
-                $("progressFill").style.width = `${pct}%`;
-            } else if (event.event === "Finished") {
-                $("progressFill").style.width = "100%";
-                $("progressLabel").textContent = "Restarting…";
-            }
-        });
-
-        await window.__TAURI__.process.relaunch();
+        showUpdateModal(update);
     } catch (err) {
         setLabel("Check");
-        $("progressLine").hidden = true;
-        if (interactive) toast(`Update failed: ${err}`, "bad");
+        if (interactive) toast(`Update check failed: ${err}`, "bad");
     }
 }
 
@@ -1415,7 +1519,8 @@ listen("activity", (event) => {
     renderSettings();
 
     if (snap.settings.auto_check_updates) {
-        // Quiet on startup: only speaks up if an update actually installs.
+        // Quiet unless there is actually something to install, in which
+        // case the modal appears on its own.
         checkForUpdate(null, false);
     }
 })();

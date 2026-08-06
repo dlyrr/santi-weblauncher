@@ -25,6 +25,10 @@
     "core:window:allow-center",
     "core:window:allow-set-resizable",
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "core:window:allow-start-resize-dragging",
+    "core:window:allow-is-maximized",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close"
   ]
 }
