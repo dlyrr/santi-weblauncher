@@ -428,3 +428,115 @@ input, textarea { user-select: text; }
     .btn:hover, .btn:active, .iconbtn:active,
     .epill:hover, .epill:active { transform: none; }
 }
+
+/* ── Collapsing rows and controls ───────────────────────────── */
+
+/*
+    Conditional rows stay mounted and collapse, so revealing one animates
+    instead of popping. grid-template-rows animates where max-height guesses.
+*/
+.row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: 1fr;
+    align-items: center;
+    transition:
+        grid-template-rows var(--base) var(--ease),
+        opacity var(--base) var(--ease),
+        padding var(--base) var(--ease),
+        border-color var(--base) var(--ease);
+}
+.row > * { min-height: 0; }
+
+.row--collapsed {
+    grid-template-rows: 0fr;
+    opacity: 0;
+    padding-top: 0; padding-bottom: 0;
+    border-color: transparent;
+    pointer-events: none;
+    overflow: hidden;
+}
+.row--collapsed > * { overflow: hidden; }
+
+.collapsible {
+    display: inline-flex; align-items: center;
+    max-width: 160px; opacity: 1;
+    transition:
+        max-width var(--base) var(--ease),
+        opacity var(--fast) var(--ease),
+        margin var(--base) var(--ease);
+}
+.collapsible--hidden {
+    max-width: 0; opacity: 0; margin-right: -8px;
+    overflow: hidden; pointer-events: none;
+}
+
+.row--disabled { opacity: .4; pointer-events: none; transition: opacity var(--base) var(--ease); }
+
+/* ── Toggle ─────────────────────────────────────────────────── */
+
+.toggle__track {
+    /* A touch of overshoot so the thumb settles rather than snapping. */
+    transition: background .26s cubic-bezier(.34, 1.4, .5, 1), border-color var(--fast) var(--ease);
+}
+.toggle__thumb {
+    transition:
+        transform .26s cubic-bezier(.34, 1.5, .5, 1),
+        background var(--fast) var(--ease),
+        width .18s var(--ease);
+}
+/* Squash while held, like a physical switch. */
+.toggle:active .toggle__thumb { width: 19px; }
+.toggle input:checked + .toggle__track .toggle__thumb { transform: translateX(15px); }
+.toggle:active input:checked + .toggle__track .toggle__thumb { transform: translateX(11px); }
+
+/* ── Dropdown ───────────────────────────────────────────────── */
+
+.dd {
+    display: inline-flex; align-items: center; justify-content: space-between; gap: 8px;
+    min-width: 132px; padding: 6px 10px 6px 12px;
+    border: 1px solid var(--line); border-radius: var(--r-sm);
+    background: var(--fill); color: var(--text);
+    font-size: 12px; cursor: pointer; text-align: left;
+    transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.dd:hover { background: var(--fill-strong); }
+.dd[data-open="true"] { border-color: var(--accent); background: var(--fill-strong); }
+
+.dd__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd__chevron { width: 13px; height: 13px; flex-shrink: 0; color: var(--buttons); transition: transform var(--base) var(--ease); }
+.dd[data-open="true"] .dd__chevron { transform: rotate(180deg); color: var(--accent); }
+
+.dd__menu {
+    position: fixed; z-index: 60;
+    padding: 4px; border: 1px solid var(--line); border-radius: var(--r-sm);
+    background: var(--surface);
+    box-shadow: 0 16px 40px -14px rgba(0, 0, 0, .9);
+    display: flex; flex-direction: column; gap: 2px;
+    max-height: 260px; overflow-y: auto;
+    transform-origin: top center;
+    animation: ddIn .16s var(--ease);
+}
+.dd__menu--above { transform-origin: bottom center; }
+.dd__menu--closing { animation: ddOut .12s var(--ease) forwards; }
+
+@keyframes ddIn  { from { opacity: 0; transform: translateY(-4px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes ddOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-3px) scale(.98); } }
+
+.dd__opt {
+    padding: 7px 11px; border: 0; border-radius: 5px;
+    background: none; color: var(--description);
+    font-size: 12px; text-align: left; cursor: pointer; white-space: nowrap;
+    transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.dd__opt:hover { background: var(--fill); color: var(--text); }
+.dd__opt[aria-selected="true"] {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .row, .collapsible, .toggle__track, .toggle__thumb, .dd__chevron { transition: none; }
+    .dd__menu { animation: none; }
+    .toggle:active .toggle__thumb { width: 15px; }
+}

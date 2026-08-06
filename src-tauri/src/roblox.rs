@@ -52,7 +52,9 @@ pub fn read_channel() -> Result<Option<String>> {
     };
 
     match key.get_value::<String, _>(CHANNEL_VALUE) {
-        Ok(value) if value.trim().is_empty() => Ok(None),
+        // An empty value is how production is expressed, and it's what we write
+        // for LIVE — so report it as LIVE rather than "not pinned".
+        Ok(value) if value.trim().is_empty() => Ok(Some("LIVE".to_string())),
         Ok(value) => Ok(Some(value)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err).context("reading the Roblox channel value"),
@@ -64,6 +66,34 @@ pub fn read_channel() -> Result<Option<String>> {
     Ok(None)
 }
 
+/// The value to write for a given channel.
+///
+/// "LIVE" is the *deployment* channel name — it works for the CDN paths and the
+/// client-version API, but it is **not** a valid client-settings bucket:
+///
+/// ```text
+/// clientsettingscdn.roblox.com/v2/settings/application/PCDesktopClient              -> 200
+/// clientsettingscdn.roblox.com/v2/settings/application/PCDesktopClient/bucket/LIVE  -> 403
+/// clientsettingscdn.roblox.com/v2/settings/application/PCDesktopClient/bucket/ZNext -> 200
+/// ```
+///
+/// With a non-empty channel in the registry the client requests the bucket-scoped
+/// settings, so writing "LIVE" makes it request a 403 and the client dies with
+/// "Failed to download or apply critical settings, please check your internet
+/// connection." Production is the *empty* value — still a pin, because we
+/// re-assert it, but pointing at the settings endpoint that actually exists.
+fn channel_registry_value(channel: &str) -> &str {
+    let trimmed = channel.trim();
+    if trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("live")
+        || trimmed.eq_ignore_ascii_case("production")
+    {
+        ""
+    } else {
+        trimmed
+    }
+}
+
 /// Pin Roblox to a channel. Passing `LIVE` is the "stop putting me in A/B
 /// branches" button — those reroutes are what break executors mid-session.
 #[cfg(windows)]
@@ -72,12 +102,13 @@ pub fn set_channel(channel: &str) -> Result<()> {
     use winreg::RegKey;
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let value = channel_registry_value(channel);
 
     for key_path in [CHANNEL_KEY, STUDIO_CHANNEL_KEY] {
         let (key, _) = hkcu
             .create_subkey(key_path)
             .with_context(|| format!("creating {key_path}"))?;
-        key.set_value(CHANNEL_VALUE, &channel)
+        key.set_value(CHANNEL_VALUE, &value)
             .with_context(|| format!("writing the channel value under {key_path}"))?;
     }
 
@@ -397,4 +428,24 @@ pub fn roblox_root() -> Option<PathBuf> {
     let local = dirs::data_local_dir()?;
     let path = local.join("Roblox");
     path.is_dir().then_some(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::channel_registry_value;
+
+    #[test]
+    fn production_channels_map_to_empty() {
+        // Anything meaning "production" must write empty, or the client asks
+        // for a settings bucket that 403s and refuses to start.
+        for input in ["LIVE", "live", "Live", "production", "PRODUCTION", "", "  "] {
+            assert_eq!(channel_registry_value(input), "", "for input {input:?}");
+        }
+    }
+
+    #[test]
+    fn real_channels_pass_through() {
+        assert_eq!(channel_registry_value("ZCanary"), "ZCanary");
+        assert_eq!(channel_registry_value("  ZNext "), "ZNext");
+    }
 }

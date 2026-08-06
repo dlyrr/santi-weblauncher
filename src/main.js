@@ -226,7 +226,7 @@ function renderExploitPicker(host) {
         more.className = "epill epill--more";
         more.textContent = pickerExpanded ? "show fewer" : `+${remaining} more`;
         more.style.setProperty("--i", String(Math.min(shown.length, 12) + 1));
-        more.addEventListener("click", () => { pickerExpanded = !pickerExpanded; renderSettings(); });
+        more.addEventListener("click", () => { pickerExpanded = !pickerExpanded; refreshPicker(); });
         host.append(more);
     }
 }
@@ -275,11 +275,45 @@ const THEME_KEYS = [
     ["danger", "Danger", "Kill button and bottom-bar highlight"],
 ];
 
+/* ── Reactive bindings ──────────────────────────────────────── */
+
+/*
+    Settings rows used to be thrown away and rebuilt on every click, which reset
+    the scroll position, replayed entrance animations and made a toggle feel like
+    the whole app blinked. Instead each row registers a small `apply` closure
+    that reads current state and mutates only its own DOM. A change runs every
+    closure for the visible tab — cheap, and nothing is destroyed.
+
+    Cleared whenever the pane is genuinely rebuilt (tab switch).
+*/
+let bindings = [];
+
+function bind(apply) {
+    bindings.push(apply);
+    apply();
+}
+
+function syncUI() {
+    for (const apply of bindings) apply();
+}
+
 /* ── Row builders ───────────────────────────────────────────── */
 
-function row(title, desc, control, { disabled = false } = {}) {
+function row(title, desc, control, { disabled = false, when = null, dim = null } = {}) {
     const el = document.createElement("div");
     el.className = "row" + (disabled ? " row--disabled" : "");
+
+    // `when` rows stay in the DOM and collapse instead of being added and
+    // removed, so showing one can animate rather than pop.
+    if (when) {
+        bind(() => {
+            const show = when();
+            if (show === !el.classList.contains("row--collapsed")) return;
+            el.classList.toggle("row--collapsed", !show);
+        });
+    }
+
+    if (dim) bind(() => el.classList.toggle("row--disabled", dim()));
 
     const text = document.createElement("div");
     text.className = "row__text";
@@ -289,7 +323,9 @@ function row(title, desc, control, { disabled = false } = {}) {
     heading.textContent = title;
     text.append(heading);
 
-    if (desc) {
+    // An empty string still creates the element — callers that fill it from a
+    // binding need something to write into. Only `null` omits it entirely.
+    if (desc !== null && desc !== undefined) {
         const description = document.createElement("div");
         description.className = "row__desc";
         description.textContent = desc;
@@ -302,6 +338,15 @@ function row(title, desc, control, { disabled = false } = {}) {
 
     el.append(text, holder);
     return el;
+}
+
+/* Wrap a control so it can collapse in place instead of being removed. */
+function collapsible(node, when) {
+    const holder = document.createElement("span");
+    holder.className = "collapsible";
+    holder.append(node);
+    bind(() => holder.classList.toggle("collapsible--hidden", !when()));
+    return holder;
 }
 
 function groupLabel(name) {
@@ -317,7 +362,12 @@ function toggle(checked, onChange) {
 
     const input = document.createElement("input");
     input.type = "checkbox";
-    input.checked = Boolean(checked);
+
+    // A function keeps the control honest when something else changes it —
+    // a reset, or the backend rejecting the write.
+    const read = typeof checked === "function" ? checked : () => checked;
+    bind(() => { input.checked = Boolean(read()); });
+
     input.addEventListener("change", () => onChange(input.checked));
 
     const track = document.createElement("span");
@@ -331,13 +381,16 @@ function toggle(checked, onChange) {
 }
 
 function numberField(value, onChange, { width = 74, unit = null } = {}) {
+    const read = typeof value === "function" ? value : () => value;
+
     if (!unit) {
         const input = document.createElement("input");
         input.className = "field field--num";
         input.type = "text";
         input.inputMode = "numeric";
-        input.value = value ?? "";
         input.style.width = `${width}px`;
+        // Never overwrite what someone is halfway through typing.
+        bind(() => { if (document.activeElement !== input) input.value = read() ?? ""; });
         input.addEventListener("change", () => onChange(input.value.trim()));
         return input;
     }
@@ -347,7 +400,7 @@ function numberField(value, onChange, { width = 74, unit = null } = {}) {
     const input = document.createElement("input");
     input.type = "text";
     input.inputMode = "numeric";
-    input.value = value ?? "";
+    bind(() => { if (document.activeElement !== input) input.value = read() ?? ""; });
     input.addEventListener("change", () => onChange(input.value.trim()));
     const unitEl = document.createElement("span");
     unitEl.className = "unit";
@@ -356,18 +409,120 @@ function numberField(value, onChange, { width = 74, unit = null } = {}) {
     return wrap;
 }
 
-function select(options, value, onChange) {
-    const el = document.createElement("select");
-    el.className = "pick";
-    for (const option of options) {
-        const opt = document.createElement("option");
-        opt.value = option.value;
-        opt.textContent = option.label;
-        el.append(opt);
+/*
+    Custom dropdown. The native <select> can't be styled to match the rest of the
+    panel, and its popup ignores the app's theme entirely.
+
+    The menu is portalled to <body> with fixed positioning: the settings pane is
+    an overflow container, so a menu nested inside it would be clipped by the
+    first row it tried to overlap.
+*/
+let openMenu = null;
+
+function closeOpenMenu() {
+    if (!openMenu) return;
+    const { menu, control } = openMenu;
+    openMenu = null;
+    control.dataset.open = "false";
+    control.setAttribute("aria-expanded", "false");
+    menu.classList.add("dd__menu--closing");
+    menu.addEventListener("animationend", () => menu.remove(), { once: true });
+    // Belt and braces: if the animation never fires, still clean up.
+    setTimeout(() => menu.remove(), 300);
+}
+
+document.addEventListener("pointerdown", (event) => {
+    if (!openMenu) return;
+    if (openMenu.menu.contains(event.target) || openMenu.control.contains(event.target)) return;
+    closeOpenMenu();
+});
+document.addEventListener("keydown", (event) => {
+    if (openMenu && event.key === "Escape") {
+        event.stopPropagation();
+        closeOpenMenu();
     }
-    el.value = value ?? "";
-    el.addEventListener("change", () => onChange(el.value));
-    return el;
+});
+// A scrolling pane would leave the menu floating over the wrong row.
+window.addEventListener("scroll", () => closeOpenMenu(), true);
+window.addEventListener("resize", () => closeOpenMenu());
+
+function select(options, value, onChange) {
+    const control = document.createElement("button");
+    control.type = "button";
+    control.className = "dd";
+    control.dataset.open = "false";
+    control.setAttribute("aria-haspopup", "listbox");
+    control.setAttribute("aria-expanded", "false");
+
+    const label = document.createElement("span");
+    label.className = "dd__label";
+
+    const chevron = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    chevron.setAttribute("viewBox", "0 0 16 16");
+    chevron.setAttribute("class", "dd__chevron");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M4 6.5 8 10.5 12 6.5");
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.6");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    chevron.append(path);
+
+    control.append(label, chevron);
+
+    const read = typeof value === "function" ? value : () => value;
+    bind(() => {
+        const current = read();
+        const match = options.find((option) => option.value === current);
+        label.textContent = match ? match.label : String(current ?? "");
+    });
+
+    control.addEventListener("click", () => {
+        if (openMenu && openMenu.control === control) {
+            closeOpenMenu();
+            return;
+        }
+        closeOpenMenu();
+
+        const menu = document.createElement("div");
+        menu.className = "dd__menu";
+        menu.setAttribute("role", "listbox");
+
+        const current = read();
+        for (const option of options) {
+            const item = document.createElement("button");
+            item.type = "button";
+            item.className = "dd__opt";
+            item.setAttribute("role", "option");
+            item.setAttribute("aria-selected", String(option.value === current));
+            item.textContent = option.label;
+            item.addEventListener("click", () => {
+                closeOpenMenu();
+                if (option.value !== read()) onChange(option.value);
+            });
+            menu.append(item);
+        }
+
+        document.body.append(menu);
+
+        // Position under the control, flipping above when there isn't room.
+        const rect = control.getBoundingClientRect();
+        const height = menu.offsetHeight;
+        const below = window.innerHeight - rect.bottom;
+        const flip = below < height + 12 && rect.top > height + 12;
+
+        menu.style.minWidth = `${Math.max(rect.width, 150)}px`;
+        menu.style.left = `${Math.min(rect.left, window.innerWidth - menu.offsetWidth - 10)}px`;
+        menu.style.top = flip ? `${rect.top - height - 6}px` : `${rect.bottom + 6}px`;
+        if (flip) menu.classList.add("dd__menu--above");
+
+        control.dataset.open = "true";
+        control.setAttribute("aria-expanded", "true");
+        openMenu = { menu, control };
+    });
+
+    return control;
 }
 
 function button(label, onClick, variant = "") {
@@ -395,29 +550,63 @@ function statusDot(tone) {
 
 /* ── Settings mutation ──────────────────────────────────────── */
 
+/*
+    Apply a settings change without tearing the panel down.
+
+    The control the user just touched already shows the new value, so the local
+    copy is updated first and the bound closures refresh anything that depends on
+    it. Only if the backend rejects the write does anything visibly move — the
+    previous state is restored and the reason surfaced.
+*/
 async function patch(changes) {
-    const next = { ...snap.settings, ...changes };
+    const previous = structuredClone(snap.settings);
+    Object.assign(snap.settings, changes);
+
+    syncUI();
+    renderMain();
+
     try {
-        snap = await invoke("apply_settings", { settings: next });
-        renderMain();
-        renderSettings();
+        snap = await invoke("apply_settings", { settings: snap.settings });
     } catch (err) {
+        snap.settings = previous;
         toast(String(err), "bad");
-        snap = await invoke("get_snapshot");
-        renderSettings();
     }
+
+    syncUI();
+    renderMain();
 }
 
 async function patchProfile(changes) {
     const current = profile();
     if (!current) return;
+
+    const previous = structuredClone(current);
+    Object.assign(current, changes);
+
+    syncUI();
+    renderMain();
+    // The picker's contents genuinely change shape when a sync is set or
+    // cleared (the unselected pills disappear), so it is rebuilt in place.
+    refreshPicker();
+
     try {
-        snap.settings = await invoke("update_profile", { profile: { ...current, ...changes } });
-        renderMain();
-        renderSettings();
+        snap.settings = await invoke("update_profile", { profile: { ...current } });
     } catch (err) {
+        Object.assign(current, previous);
         toast(String(err), "bad");
     }
+
+    syncUI();
+    renderMain();
+    refreshPicker();
+}
+
+/* Rebuild just the exploit pills, leaving the rest of the pane untouched. */
+let pickerHostEl = null;
+function refreshPicker() {
+    if (!pickerHostEl || !pickerHostEl.isConnected) return;
+    pickerHostEl.replaceChildren();
+    renderExploitPicker(pickerHostEl);
 }
 
 /* ── Tabs ───────────────────────────────────────────────────── */
@@ -455,6 +644,11 @@ function renderRail() {
 function renderSettings() {
     if ($("settings").hidden || !snap) return;
     renderRail();
+    closeOpenMenu();
+
+    // A genuine rebuild: drop the old closures so they can't outlive their DOM.
+    bindings = [];
+    pickerHostEl = null;
 
     const pane = $("settingsPane");
     pane.replaceChildren();
@@ -466,7 +660,7 @@ function renderSettings() {
         pane.append(row(
             "Roblox Bootstrapper",
             "Automatically downloads and updates the Roblox client",
-            toggle(s.bootstrapper, (v) => patch({ bootstrapper: v }))
+            toggle(() => snap.settings.bootstrapper, (v) => patch({ bootstrapper: v }))
         ));
 
         pane.append(groupLabel("Version options"));
@@ -474,6 +668,7 @@ function renderSettings() {
         /* Exploit sync — the same pill picker the website uses. */
         const pickerHost = document.createElement("div");
         pickerHost.className = "epills";
+        pickerHostEl = pickerHost;
         renderExploitPicker(pickerHost);
 
         const syncRow = row(
@@ -500,42 +695,44 @@ function renderSettings() {
         pane.append(row(
             "Use Roblox CDN instead",
             "Resolve versions straight from Roblox rather than through WEAO",
-            toggle(s.use_roblox_cdn, (v) => patch({ use_roblox_cdn: v }))
+            toggle(() => snap.settings.use_roblox_cdn, (v) => patch({ use_roblox_cdn: v }))
         ));
 
         pane.append(row(
             "Studio Bootstrapper",
             "Automatically downloads and updates Roblox Studio",
-            toggle(s.studio_bootstrapper, (v) => patch({ studio_bootstrapper: v }))
+            toggle(() => snap.settings.studio_bootstrapper, (v) => patch({ studio_bootstrapper: v }))
         ));
 
         pane.append(row(
             "Multi instance",
             "Allows the launcher to open multiple Roblox clients",
-            toggle(s.multi_instance, (v) => patch({ multi_instance: v }))
+            toggle(() => snap.settings.multi_instance, (v) => patch({ multi_instance: v }))
         ));
 
         pane.append(row(
             "Prompt on new instance",
             "Confirm before launching when Roblox is already running",
-            toggle(s.prompt_on_new_instance, (v) => patch({ prompt_on_new_instance: v }))
+            toggle(() => snap.settings.prompt_on_new_instance, (v) => patch({ prompt_on_new_instance: v }))
         ));
 
         pane.append(row(
             "Launch delay",
             "Wait before launching the Roblox client",
             [
-                s.launch_delay_enabled
-                    ? numberField(s.launch_delay_seconds, (v) => patch({ launch_delay_seconds: Math.max(0, parseInt(v, 10) || 0) }), { unit: "sec" })
-                    : document.createComment(""),
-                toggle(s.launch_delay_enabled, (v) => patch({ launch_delay_enabled: v })),
-            ].filter((n) => n.nodeType !== Node.COMMENT_NODE)
+                collapsible(
+                    numberField(() => snap.settings.launch_delay_seconds,
+                        (v) => patch({ launch_delay_seconds: Math.max(0, parseInt(v, 10) || 0) }), { unit: "sec" }),
+                    () => snap.settings.launch_delay_enabled
+                ),
+                toggle(() => snap.settings.launch_delay_enabled, (v) => patch({ launch_delay_enabled: v })),
+            ]
         ));
 
         pane.append(row(
             "Notify on launch",
             "Show a Windows notification with the Roblox process ID on launch",
-            toggle(s.notify_on_launch, (v) => patch({ notify_on_launch: v }))
+            toggle(() => snap.settings.notify_on_launch, (v) => patch({ notify_on_launch: v }))
         ));
 
         pane.append(groupLabel("Startup"));
@@ -543,34 +740,38 @@ function renderSettings() {
         pane.append(row(
             "Launch on Startup",
             "Start santi.weblauncher automatically when you sign in to Windows",
-            toggle(s.launch_on_startup, (v) => patch({ launch_on_startup: v }))
+            toggle(() => snap.settings.launch_on_startup, (v) => patch({ launch_on_startup: v }))
         ));
 
-        // Only meaningful while autostart is on, so it only appears then.
-        if (s.launch_on_startup) {
-            pane.append(row(
-                "Start in Tray",
-                "When Windows starts it, come up hidden in the system tray",
-                toggle(s.start_in_tray, (v) => patch({ start_in_tray: v }))
-            ));
-        }
+        // Only meaningful while autostart is on, so it collapses when it is not.
+        pane.append(row(
+            "Start in Tray",
+            "When Windows starts it, come up hidden in the system tray",
+            toggle(() => snap.settings.start_in_tray, (v) => patch({ start_in_tray: v })),
+            { when: () => snap.settings.launch_on_startup }
+        ));
 
         pane.append(groupLabel("Channel"));
 
         pane.append(row(
             "Pin the release channel",
             "Holds Roblox on one channel and re-applies it before every launch",
-            toggle(s.pin_channel, (v) => patch({ pin_channel: v }))
+            toggle(() => snap.settings.pin_channel, (v) => patch({ pin_channel: v }))
         ));
 
-        if (s.pin_channel) {
-            const input = document.createElement("input");
-            input.className = "field field--wide";
-            input.value = s.pinned_channel;
-            input.spellcheck = false;
-            input.addEventListener("change", () => patch({ pinned_channel: input.value.trim() || "LIVE" }));
-            pane.append(row("Channel", "Which channel to hold Roblox on", input));
-        }
+        const channelInput = document.createElement("input");
+        channelInput.className = "field field--wide";
+        channelInput.spellcheck = false;
+        bind(() => {
+            if (document.activeElement !== channelInput) channelInput.value = snap.settings.pinned_channel;
+        });
+        channelInput.addEventListener("change", () => patch({ pinned_channel: channelInput.value.trim() || "LIVE" }));
+        pane.append(row(
+            "Channel",
+            "Which channel to hold Roblox on. LIVE means production.",
+            channelInput,
+            { when: () => snap.settings.pin_channel }
+        ));
         return;
     }
 
@@ -579,11 +780,13 @@ function renderSettings() {
             "FPS cap",
             "Limit the Roblox client frame rate",
             [
-                s.fps_cap_enabled
-                    ? numberField(s.fps_cap, (v) => patch({ fps_cap: Math.max(1, parseInt(v, 10) || 60) }), { unit: "fps" })
-                    : document.createComment(""),
-                toggle(s.fps_cap_enabled, (v) => patch({ fps_cap_enabled: v })),
-            ].filter((n) => n.nodeType !== Node.COMMENT_NODE)
+                collapsible(
+                    numberField(() => snap.settings.fps_cap,
+                        (v) => patch({ fps_cap: Math.max(1, parseInt(v, 10) || 60) }), { unit: "fps" }),
+                    () => snap.settings.fps_cap_enabled
+                ),
+                toggle(() => snap.settings.fps_cap_enabled, (v) => patch({ fps_cap_enabled: v })),
+            ]
         ));
 
         pane.append(row(
@@ -595,7 +798,7 @@ function renderSettings() {
                     { value: "closest", label: "Closest" },
                     { value: "random", label: "Random" },
                 ],
-                s.server_mode || "default",
+                () => snap.settings.server_mode || "default",
                 (v) => patch({ server_mode: v })
             )
         ));
@@ -605,21 +808,21 @@ function renderSettings() {
         pane.append(row(
             "Activity Watcher",
             "Read Roblox's log files to track your current game session",
-            toggle(s.activity_watcher, (v) => patch({ activity_watcher: v }))
+            toggle(() => snap.settings.activity_watcher, (v) => patch({ activity_watcher: v }))
         ));
 
         pane.append(row(
             "Discord Rich Presence",
             "Show the game you're in on your Discord profile",
-            toggle(s.discord_rpc, (v) => patch({ discord_rpc: v })),
-            { disabled: !s.activity_watcher }
+            toggle(() => snap.settings.discord_rpc, (v) => patch({ discord_rpc: v })),
+            { dim: () => !snap.settings.activity_watcher }
         ));
 
         pane.append(row(
             "Show join buttons",
             'Add a "See game page" button to your presence',
-            toggle(s.show_join_buttons, (v) => patch({ show_join_buttons: v })),
-            { disabled: !s.activity_watcher || !s.discord_rpc }
+            toggle(() => snap.settings.show_join_buttons, (v) => patch({ show_join_buttons: v })),
+            { dim: () => !snap.settings.activity_watcher || !snap.settings.discord_rpc }
         ));
 
         if (session) {
@@ -640,14 +843,25 @@ function renderSettings() {
     }
 
     if (activeTab === "protocol") {
-        const pr = snap.protocol;
+        const statusRow = (title, ours, registered) => {
+            const dot = statusDot("off");
+            const el = row(title, "", dot);
+            const caption = el.querySelector(".row__desc");
+            bind(() => {
+                const mine = ours();
+                const any = registered();
+                caption.textContent = mine
+                    ? "Registered to this launcher"
+                    : any ? "Another bootstrapper is registered" : "Not registered";
+                dot.dataset.tone = mine ? "ok" : any ? "warn" : "off";
+            });
+            return el;
+        };
 
-        pane.append(row(
+        pane.append(statusRow(
             "Registration status",
-            pr.player_ours ? "Registered to this launcher"
-                : pr.player_registered ? "Another bootstrapper is registered"
-                : "Not registered",
-            statusDot(pr.player_ours ? "ok" : pr.player_registered ? "warn" : "off")
+            () => snap.protocol.player_ours,
+            () => snap.protocol.player_registered
         ));
 
         pane.append(row(
@@ -662,12 +876,10 @@ function renderSettings() {
             button("Remove", () => setProtocol(false, false))
         ));
 
-        pane.append(row(
+        pane.append(statusRow(
             "Studio Registration status",
-            pr.studio_ours ? "Registered to this launcher"
-                : pr.studio_registered ? "Another bootstrapper is registered"
-                : "Not registered",
-            statusDot(pr.studio_ours ? "ok" : pr.studio_registered ? "warn" : "off")
+            () => snap.protocol.studio_ours,
+            () => snap.protocol.studio_registered
         ));
 
         pane.append(row(
@@ -688,21 +900,25 @@ function renderSettings() {
         for (const [key, title, desc] of THEME_KEYS) {
             const swatch = document.createElement("button");
             swatch.className = "swatch";
-            swatch.style.background = s.theme[key];
 
             const picker = document.createElement("input");
             picker.type = "color";
-            picker.value = s.theme[key];
             swatch.append(picker);
             swatch.addEventListener("click", () => picker.click());
 
             const hex = document.createElement("input");
             hex.className = "field hex";
-            hex.value = s.theme[key];
             hex.spellcheck = false;
 
+            bind(() => {
+                const current = snap.settings.theme[key];
+                swatch.style.background = current;
+                picker.value = current;
+                if (document.activeElement !== hex) hex.value = current;
+            });
+
             const commit = (value) => {
-                if (!/^#[0-9a-f]{6}$/i.test(value)) { hex.value = s.theme[key]; return; }
+                if (!/^#[0-9a-f]{6}$/i.test(value)) { hex.value = snap.settings.theme[key]; return; }
                 setTheme({ [key]: value.toLowerCase() });
             };
             picker.addEventListener("change", () => commit(picker.value));
@@ -714,24 +930,26 @@ function renderSettings() {
         pane.append(row(
             "Grid overlay",
             "Show dot-grid texture on background",
-            toggle(s.theme.grid_overlay, (v) => setTheme({ grid_overlay: v }))
+            toggle(() => snap.settings.theme.grid_overlay, (v) => setTheme({ grid_overlay: v }))
         ));
 
         const slider = document.createElement("input");
         slider.type = "range";
         slider.className = "slider";
         slider.min = "80"; slider.max = "140"; slider.step = "5";
-        slider.value = String(s.theme.ui_scale);
         const scaleLabel = document.createElement("span");
         scaleLabel.className = "tag";
-        scaleLabel.textContent = `${s.theme.ui_scale}%`;
+        bind(() => {
+            if (document.activeElement !== slider) slider.value = String(snap.settings.theme.ui_scale);
+            scaleLabel.textContent = `${snap.settings.theme.ui_scale}%`;
+        });
         slider.addEventListener("input", () => { scaleLabel.textContent = `${slider.value}%`; });
         slider.addEventListener("change", () => setTheme({ ui_scale: Number(slider.value) }));
         pane.append(row("UI scale", "Make text and controls larger", [slider, scaleLabel]));
 
-        pane.append(row(
+        const bgRow = row(
             "Background image",
-            s.theme.background_image ? s.theme.background_image : "None",
+            "None",
             [
                 button("Browse", async () => {
                     const file = await openDialog({
@@ -740,9 +958,15 @@ function renderSettings() {
                     });
                     if (file) setTheme({ background_image: file });
                 }),
-                s.theme.background_image ? button("Clear", () => setTheme({ background_image: null })) : document.createComment(""),
-            ].filter((n) => n.nodeType !== Node.COMMENT_NODE)
-        ));
+                collapsible(
+                    button("Clear", () => setTheme({ background_image: null })),
+                    () => Boolean(snap.settings.theme.background_image)
+                ),
+            ]
+        );
+        const bgCaption = bgRow.querySelector(".row__desc");
+        bind(() => { bgCaption.textContent = snap.settings.theme.background_image || "None"; });
+        pane.append(bgRow);
 
         pane.append(row(
             "Reset theme",
@@ -756,7 +980,7 @@ function renderSettings() {
         pane.append(row(
             "Auto check for updates",
             "Check for santi.weblauncher updates on startup",
-            toggle(s.auto_check_updates, (v) => patch({ auto_check_updates: v }))
+            toggle(() => snap.settings.auto_check_updates, (v) => patch({ auto_check_updates: v }))
         ));
 
         const updateBtn = button("Check", () => checkForUpdate(updateBtn, true));
@@ -810,6 +1034,7 @@ function renderFlags(pane) {
     const commit = async (next) => {
         try {
             snap.settings = await invoke("set_fflags", { id: p.id, fflags: next });
+            // The custom-flag list changes length, so this pane is rebuilt.
             renderSettings();
         } catch (err) {
             toast(String(err), "bad");
@@ -926,7 +1151,7 @@ function renderFlags(pane) {
 async function setProtocol(enabled, studio) {
     try {
         snap.protocol = await invoke("set_protocol_handler", { enabled, studio });
-        renderSettings();
+        syncUI();
         toast(enabled ? "Handler registered" : "Handler removed", "ok");
     } catch (err) {
         toast(String(err), "bad");
@@ -942,14 +1167,23 @@ async function openFolder(which) {
 }
 
 async function setTheme(changes) {
+    const previous = structuredClone(snap.settings.theme);
     const next = changes === null ? defaultTheme() : { ...snap.settings.theme, ...changes };
+
+    // Paint immediately; a colour picker that lags behind the swatch feels broken.
+    snap.settings.theme = next;
+    applyTheme();
+    syncUI();
+
     try {
         snap.settings = await invoke("set_theme", { theme: next });
-        applyTheme();
-        renderSettings();
     } catch (err) {
+        snap.settings.theme = previous;
         toast(String(err), "bad");
     }
+
+    applyTheme();
+    syncUI();
 }
 
 function defaultTheme() {
@@ -1073,7 +1307,8 @@ $("launchBtn").addEventListener("click", async () => {
         busy = false;
         setTimeout(() => { $("progressLine").hidden = true; $("progressFill").style.width = "0%"; }, 700);
         renderMain();
-        renderSettings();
+        syncUI();
+        refreshPicker();
     }
 });
 
@@ -1144,7 +1379,8 @@ async function checkForUpdate(btn, interactive) {
 listen("activity", (event) => {
     session = event.payload || null;
     renderMain();
-    if (activeTab === "roblox") renderSettings();
+    // The Roblox tab shows what is playing, and that row appears/disappears.
+    if (activeTab === "roblox" && !$("settings").hidden) renderSettings();
 });
 
 /* ── Boot ───────────────────────────────────────────────────── */

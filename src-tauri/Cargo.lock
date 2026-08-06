@@ -3278,7 +3278,7 @@ dependencies = [
 
 [[package]]
 name = "santi-weblauncher"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
