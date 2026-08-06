@@ -1,0 +1,14 @@
+{
+  "name": "santi-weblauncher",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Roblox bootstrapper that pins the channel and version you choose, with live executor compatibility from WEAO",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2"
+  }
+}

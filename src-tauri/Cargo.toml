@@ -1,0 +1,41 @@
+[package]
+name = "santi-weblauncher"
+version = "1.0.0"
+description = "Roblox bootstrapper that pins the channel and version you choose"
+authors = ["santi (dlyrr)"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "santi_weblauncher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync"] }
+futures-util = "0.3"
+
+zip = { version = "2", default-features = false, features = ["deflate"] }
+anyhow = "1"
+thiserror = "2"
+dirs = "5"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
