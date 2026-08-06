@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 
 use crate::deploy::BinaryType;
+use crate::servers::ServerMode;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
@@ -183,6 +184,18 @@ pub struct Settings {
     pub fps_cap_enabled: bool,
     #[serde(default = "default_fps_cap")]
     pub fps_cap: u32,
+    /// Which server a launch should land in.
+    #[serde(default)]
+    pub server_mode: ServerMode,
+    /// Tail Roblox's logs to track the current game session.
+    #[serde(default = "default_true")]
+    pub activity_watcher: bool,
+    /// Show the current game on your Discord profile. Requires the watcher.
+    #[serde(default = "default_true")]
+    pub discord_rpc: bool,
+    /// Add "Join server" / "See game page" links to the presence.
+    #[serde(default = "default_true")]
+    pub show_join_buttons: bool,
 
     /* ── Advanced ── */
     #[serde(default = "default_true")]
@@ -216,6 +229,10 @@ impl Default for Settings {
             pinned_channel: default_channel(),
             fps_cap_enabled: false,
             fps_cap: default_fps_cap(),
+            server_mode: ServerMode::default(),
+            activity_watcher: true,
+            discord_rpc: true,
+            show_join_buttons: true,
             auto_check_updates: true,
             theme: Theme::default(),
         }

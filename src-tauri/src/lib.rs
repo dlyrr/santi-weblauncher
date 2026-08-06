@@ -9,9 +9,12 @@
 //! randomisation and cookie wiping. Those exist to evade account-level
 //! enforcement rather than to launch a game, so they're out of scope here.
 
+mod activity;
 mod config;
 mod deploy;
+mod discord;
 mod roblox;
+mod servers;
 mod weao;
 
 use anyhow::Result;
@@ -25,6 +28,9 @@ use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
 use config::{Profile, Settings, Theme};
 use deploy::{BinaryType, InstallProgress, VersionInfo};
+
+/// The Discord application this launcher presents itself as.
+const DISCORD_APP_ID: &str = "1534870843799375993";
 
 /// Tauri commands must return a serialisable error, so anyhow gets flattened to
 /// its full context chain — losing the causes makes install failures unreadable.
@@ -330,20 +336,20 @@ async fn resolve_exploit_version(
     Ok(weao::target_version_for(&payload, &title))
 }
 
-#[tauri::command]
-async fn install_profile(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    id: String,
+/// Shared install path. Returns the version that ended up on disk.
+async fn install_inner(
+    app: &AppHandle,
+    state: &AppState,
+    id: &str,
     version_override: Option<String>,
-) -> CommandResult<String> {
+) -> Result<String> {
     let settings = state.settings();
-    let Some(profile) = settings.profile(&id).cloned() else {
-        return Err(anyhow::anyhow!("No profile with id \"{id}\"").into());
+    let Some(profile) = settings.profile(id).cloned() else {
+        anyhow::bail!("No profile with id \"{id}\"");
     };
 
-    // Priority: explicit override, then an exploit-sync target, then the
-    // profile's own pin, then whatever is newest on the channel.
+    // Priority: explicit override, then the profile's own pin, then an
+    // exploit-sync target, then whatever is newest on the channel.
     let mut requested = version_override.or_else(|| profile.pinned_version.clone());
 
     if requested.is_none() {
@@ -369,66 +375,135 @@ async fn install_profile(
         flags.insert(key, value);
     }
 
-    if deploy::is_installed(&install_dir, profile.binary_type) {
-        if !flags.is_empty() {
-            roblox::write_fflags(&install_dir, &flags)?;
-        }
+    let already = deploy::is_installed(&install_dir, profile.binary_type);
 
-        let mut settings = state.settings();
-        if let Some(entry) = settings.profile_mut(&id) {
-            entry.installed_version = Some(version.clone());
-        }
-        state.persist(settings)?;
-
-        app.emit(
-            "install-progress",
-            InstallProgress {
-                phase: "done".into(),
-                message: format!("{version} is already installed"),
-                completed: 1,
-                total: 1,
-                bytes: 0,
+    if !already {
+        let emitter = app.clone();
+        deploy::install(
+            state.http.clone(),
+            profile.binary_type,
+            &profile.channel,
+            &version,
+            &install_dir,
+            move |progress| {
+                emitter.emit("install-progress", progress).ok();
             },
         )
-        .ok();
-
-        return Ok(version);
+        .await?;
     }
-
-    let emitter = app.clone();
-    deploy::install(
-        state.http.clone(),
-        profile.binary_type,
-        &profile.channel,
-        &version,
-        &install_dir,
-        move |progress| {
-            emitter.emit("install-progress", progress).ok();
-        },
-    )
-    .await?;
 
     if !flags.is_empty() {
         roblox::write_fflags(&install_dir, &flags)?;
     }
 
     let mut settings = state.settings();
-    if let Some(entry) = settings.profile_mut(&id) {
+    if let Some(entry) = settings.profile_mut(id) {
         entry.installed_version = Some(version.clone());
     }
     state.persist(settings)?;
+
+    app.emit(
+        "install-progress",
+        InstallProgress {
+            phase: "done".into(),
+            message: if already {
+                format!("{version} is already installed")
+            } else {
+                format!("Installed {version}")
+            },
+            completed: 1,
+            total: 1,
+            bytes: 0,
+        },
+    )
+    .ok();
 
     Ok(version)
 }
 
 #[tauri::command]
-fn launch_profile(
-    state: State<AppState>,
+async fn install_profile(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    version_override: Option<String>,
+) -> CommandResult<String> {
+    Ok(install_inner(&app, &state, &id, version_override).await?)
+}
+
+/// Resolve the build a profile's synced executor needs, if it has one.
+async fn synced_target(state: &AppState, profile: &Profile) -> Option<String> {
+    let title = profile.exploit_sync.as_ref()?;
+    let payload = weao::exploits(&state.http).await.ok()?;
+    weao::target_version_for(&payload, title).map(|v| deploy::normalize_version(&v))
+}
+
+/// What a launch would do right now, without doing it.
+#[derive(Serialize)]
+struct LaunchPlan {
+    needs_update: bool,
+    installed: Option<String>,
+    target: Option<String>,
+    exploit: Option<String>,
+}
+
+#[tauri::command]
+async fn launch_plan(state: State<'_, AppState>, id: String) -> CommandResult<LaunchPlan> {
+    let settings = state.settings();
+    let Some(profile) = settings.profile(&id).cloned() else {
+        return Err(anyhow::anyhow!("No profile with id \"{id}\"").into());
+    };
+
+    let target = synced_target(&state, &profile).await;
+    let installed = profile.installed_version.clone();
+
+    Ok(LaunchPlan {
+        needs_update: matches!((&target, &installed), (Some(t), i) if Some(t) != i.as_ref()),
+        installed,
+        target,
+        exploit: profile.exploit_sync.clone(),
+    })
+}
+
+/// The whole launch path: re-check the synced executor's build, install it if
+/// the installed one no longer matches, then start Roblox.
+#[tauri::command]
+async fn launch_flow(
+    app: AppHandle,
+    state: State<'_, AppState>,
     id: String,
     launch_arg: Option<String>,
 ) -> CommandResult<u32> {
     let settings = state.settings();
-    let Some(profile) = settings.profile(&id) else {
+    let Some(profile) = settings.profile(&id).cloned() else {
+        return Err(anyhow::anyhow!("No profile with id \"{id}\"").into());
+    };
+
+    // An executor that has moved to a different Roblox build makes the installed
+    // one useless, so re-check on every launch rather than only at sync time.
+    if let Some(target) = synced_target(&state, &profile).await {
+        if profile.installed_version.as_deref() != Some(target.as_str()) {
+            app.emit(
+                "install-progress",
+                InstallProgress {
+                    phase: "checking".into(),
+                    message: format!(
+                        "{} now needs {target} — updating",
+                        profile.exploit_sync.clone().unwrap_or_default()
+                    ),
+                    completed: 0,
+                    total: 0,
+                    bytes: 0,
+                },
+            )
+            .ok();
+
+            install_inner(&app, &state, &id, Some(target)).await?;
+        }
+    }
+
+    let settings = state.settings();
+    let Some(profile) = settings.profile(&id).cloned() else {
         return Err(anyhow::anyhow!("No profile with id \"{id}\"").into());
     };
 
@@ -444,11 +519,32 @@ fn launch_profile(
         roblox::set_channel(&settings.pinned_channel)?;
     }
 
-    if settings.launch_delay_enabled && settings.launch_delay_seconds > 0 {
-        std::thread::sleep(std::time::Duration::from_secs(settings.launch_delay_seconds as u64));
+    // Redirect the join to a chosen server, when the URI carries a place.
+    let mut arg = launch_arg;
+    if settings.server_mode != servers::ServerMode::Default {
+        if let Some(uri) = arg.clone() {
+            if let Some(place_id) = servers::place_id_from_uri(&uri) {
+                let seed = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.subsec_nanos() as u64)
+                    .unwrap_or(0);
+
+                match servers::pick(&state.http, &place_id, settings.server_mode, seed).await {
+                    Ok(Some(job_id)) => arg = Some(servers::with_job_id(&uri, &job_id)),
+                    // A server-list failure must not block the launch; Roblox
+                    // picks for us instead.
+                    Ok(None) => {}
+                    Err(err) => eprintln!("server selection skipped: {err:#}"),
+                }
+            }
+        }
     }
 
-    Ok(roblox::launch(&install_dir, profile.binary_type, launch_arg.as_deref())?)
+    if settings.launch_delay_enabled && settings.launch_delay_seconds > 0 {
+        tokio::time::sleep(std::time::Duration::from_secs(settings.launch_delay_seconds as u64)).await;
+    }
+
+    Ok(roblox::launch(&install_dir, profile.binary_type, arg.as_deref())?)
 }
 
 /* ── FFlags ─────────────────────────────────────────────────── */
@@ -622,6 +718,12 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+/// Where the launcher publishes its update manifest, shown in Advanced.
+#[tauri::command]
+fn update_feed() -> String {
+    "https://rdd.xocat.online/weblauncher/latest.json".to_string()
+}
+
 /* ── WEAO ───────────────────────────────────────────────────── */
 
 #[tauri::command]
@@ -632,6 +734,113 @@ async fn weao_versions(state: State<'_, AppState>) -> CommandResult<Value> {
 #[tauri::command]
 async fn weao_exploits(state: State<'_, AppState>) -> CommandResult<Value> {
     Ok(weao::exploits(&state.http).await?)
+}
+
+
+/* ── Activity watcher + Discord presence ────────────────────── */
+
+/// Polls Roblox's logs and mirrors the current game onto Discord.
+///
+/// Runs for the app's lifetime. Everything it touches is read from settings on
+/// each tick, so toggling the watcher or presence takes effect immediately
+/// without restarting anything.
+fn spawn_activity_watcher(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut watcher = activity::LogWatcher::new();
+        let mut rpc = discord::DiscordIpc::new(DISCORD_APP_ID);
+        let mut described: Option<String> = None;
+        let mut ticks: u64 = 0;
+
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            ticks += 1;
+
+            let (watch, presence, buttons) = {
+                let state = app.state::<AppState>();
+                let settings = state.settings();
+                (settings.activity_watcher, settings.discord_rpc, settings.show_join_buttons)
+            };
+
+            if !watch {
+                if rpc.is_connected() {
+                    rpc.disconnect();
+                }
+                if watcher.session.is_some() {
+                    watcher.session = None;
+                    app.emit("activity", Value::Null).ok();
+                }
+                continue;
+            }
+
+            let changed = watcher.poll();
+
+            // Enrich a newly seen session once, not on every tick.
+            if let Some(session) = watcher.session.clone() {
+                if described.as_deref() != Some(session.job_id.as_str()) {
+                    let mut enriched = session.clone();
+                    let state = app.state::<AppState>();
+                    let client = state.http.clone();
+                    drop(state);
+
+                    if activity::describe(&client, &mut enriched).await.is_ok() {
+                        described = Some(enriched.job_id.clone());
+                        watcher.session = Some(enriched.clone());
+                        app.emit("activity", &enriched).ok();
+                    }
+                } else if changed {
+                    app.emit("activity", &session).ok();
+                }
+            } else if changed {
+                described = None;
+                app.emit("activity", Value::Null).ok();
+            }
+
+            if !presence {
+                if rpc.is_connected() {
+                    let _ = rpc.clear_activity();
+                    rpc.disconnect();
+                }
+                continue;
+            }
+
+            // Reconnect attempts are cheap but not free; retry every ~10s.
+            if !rpc.is_connected() && ticks % 5 == 0 {
+                let _ = rpc.connect();
+            }
+
+            if !rpc.is_connected() {
+                continue;
+            }
+
+            match watcher.session.clone() {
+                Some(session) if watcher.connected => {
+                    let mut presence = discord::Activity {
+                        details: Some(session.name.clone().unwrap_or_else(|| "Playing Roblox".into())),
+                        state: session.creator.clone().map(|c| format!("by {c}")),
+                        large_image: session.icon.clone(),
+                        large_text: session.name.clone(),
+                        small_image: None,
+                        small_text: Some("santi.weblauncher".into()),
+                        start: Some(session.started),
+                        buttons: Vec::new(),
+                    };
+
+                    if buttons {
+                        presence.buttons.push(("See game page".into(), session.place_url()));
+                    }
+
+                    let _ = rpc.set_activity(&presence);
+                }
+                _ => {
+                    let _ = rpc.clear_activity();
+                    // Keep the socket warm so the next join updates instantly.
+                    if ticks % 15 == 0 {
+                        let _ = rpc.ping();
+                    }
+                }
+            }
+        }
+    });
 }
 
 /* ── Entry point ────────────────────────────────────────────── */
@@ -653,6 +862,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(move |app| {
             let root = app.path().app_data_dir()?;
             std::fs::create_dir_all(&root).ok();
@@ -723,6 +934,8 @@ pub fn run() {
                 }
             }
 
+            spawn_activity_watcher(app.handle().clone());
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -746,7 +959,8 @@ pub fn run() {
             resolve_latest,
             resolve_exploit_version,
             install_profile,
-            launch_profile,
+            launch_plan,
+            launch_flow,
             get_fflags,
             set_fflags,
             set_protocol_handler,
@@ -755,6 +969,7 @@ pub fn run() {
             read_image_data_url,
             hide_to_tray,
             quit_app,
+            update_feed,
             weao_versions,
             weao_exploits,
         ])

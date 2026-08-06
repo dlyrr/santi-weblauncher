@@ -47,7 +47,8 @@
     </main>
 
     <footer class="statusbar">
-        <span class="chip" id="versionChip">v1.0.0</span>
+        <span class="chip" id="versionChip">v1.2.0</span>
+        <span class="chip chip--muted" id="syncChip" hidden></span>
         <span class="statusbar__version mono" id="buildVersion">no build installed</span>
         <span class="statusbar__spacer"></span>
         <span class="statusbar__channel mono" id="channelState"></span>
@@ -66,6 +67,20 @@
     <div class="settings__body">
         <nav class="rail" id="settingsRail" aria-label="Settings sections"></nav>
         <div class="pane" id="settingsPane" tabindex="0"></div>
+    </div>
+</div>
+
+<div class="modal" id="outdatedModal" role="dialog" aria-modal="true" aria-labelledby="outdatedTitle" hidden>
+    <div class="modal__card">
+        <h2 class="modal__title" id="outdatedTitle">Outdated Exploit</h2>
+        <p class="modal__text">
+            This exploit requires the previous version of Roblox, it is currently outdated.
+            It may still work, but if you receive Error Code 280 while joining a game, that
+            version has been blocklisted by Roblox.
+        </p>
+        <div class="modal__actions">
+            <button class="btn btn--accent" type="button" id="outdatedOk">OK, got it</button>
+        </div>
     </div>
 </div>
 

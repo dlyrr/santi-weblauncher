@@ -28,9 +28,12 @@ async function resizeTo([width, height]) {
 const $ = (id) => document.getElementById(id);
 
 let snap = null;      // Snapshot from the backend
-let executors = [];   // WEAO exploit list
 let busy = false;
 let activeTab = "launch";
+let executors = [];
+let liveWindows = null;    // live Windows hash, for the outdated check
+let pickerExpanded = false;
+let session = null;        // current Roblox game, from the activity watcher
 
 const profile = () =>
     snap?.settings.profiles.find((p) => p.id === snap.settings.active_profile)
@@ -92,6 +95,143 @@ function icon(name) {
     svg.append(path);
     return svg;
 }
+
+/* ── Executor pills (same treatment as rdd.xocat.online) ────── */
+
+const LOGO_MANIFEST = "https://logos.xocat.online/manifest.json";
+let logoIndex = new Map();
+
+async function loadLogos() {
+    try {
+        const manifest = await fetch(LOGO_MANIFEST).then((r) => r.json());
+        const base = manifest.baseUrl || "https://logos.xocat.online";
+        logoIndex = new Map(
+            Object.entries(manifest.logos || {}).map(([title, path]) => [
+                title.trim().toLowerCase(),
+                path.startsWith("http") ? path : base + path,
+            ])
+        );
+    } catch {
+        // Logos are decoration; the picker works without them.
+        logoIndex = new Map();
+    }
+}
+
+const logoFor = (title) => logoIndex.get(String(title || "").trim().toLowerCase()) || null;
+
+/* Grouped by type, then per-group rank — WEAO's own ordering. */
+const TYPE_ORDER = { wexecutor: 0, wexternal: 1, mexecutor: 2, aexecutor: 3, iexecutor: 4 };
+
+function weaoOrder(a, b) {
+    const ga = TYPE_ORDER[a.extype] ?? 9;
+    const gb = TYPE_ORDER[b.extype] ?? 9;
+    if (ga !== gb) return ga - gb;
+    const ia = Number.isFinite(a.index) ? a.index : 999;
+    const ib = Number.isFinite(b.index) ? b.index : 999;
+    if (ia !== ib) return ia - ib;
+    return (a.__pos ?? 0) - (b.__pos ?? 0);
+}
+
+/* Only Windows executors can be synced — mobile builds aren't on the CDN. */
+const syncable = () =>
+    executors
+        .filter((e) => e && e.title && !e.hidden && String(e.rbxversion || "").startsWith("version-"))
+        .sort(weaoOrder);
+
+const isOutdated = (record) => Boolean(liveWindows) && record.rbxversion !== liveWindows;
+
+function exploitPill(record, selected) {
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "epill";
+    if (selected) pill.dataset.state = "selected";
+    else if (isOutdated(record)) pill.dataset.state = "outdated";
+    pill.setAttribute("aria-pressed", String(selected));
+    pill.title = `${record.title} — targets ${record.rbxversion}`;
+
+    const logo = logoFor(record.title);
+    if (logo) {
+        const img = document.createElement("img");
+        img.className = "epill__logo";
+        img.src = logo;
+        img.alt = "";
+        img.loading = "lazy";
+        img.addEventListener("error", () => { img.remove(); pill.classList.add("epill--nologo"); });
+        pill.append(img);
+    } else {
+        pill.classList.add("epill--nologo");
+    }
+
+    const label = document.createElement("span");
+    label.textContent = record.title;
+    pill.append(label);
+
+    if (selected) {
+        const clear = document.createElement("span");
+        clear.className = "epill__x";
+        clear.setAttribute("aria-hidden", "true");
+        clear.textContent = "×";
+        pill.append(clear);
+    }
+
+    pill.addEventListener("click", () => chooseExploit(record));
+    return pill;
+}
+
+async function chooseExploit(record) {
+    const p = profile();
+    if (!p) return;
+
+    // Clicking the chosen one again clears the sync.
+    if (p.exploit_sync === record.title) {
+        await patchProfile({ exploit_sync: null, pinned_version: null });
+        return;
+    }
+
+    await patchProfile({ exploit_sync: record.title, pinned_version: record.rbxversion });
+    if (isOutdated(record)) showOutdated();
+    toast(`Synced to ${record.title} — ${record.rbxversion}`, "ok");
+}
+
+function renderExploitPicker(host) {
+    const p = profile();
+    const all = syncable();
+
+    if (all.length === 0) {
+        const empty = document.createElement("span");
+        empty.className = "epill__loading";
+        empty.textContent = executors.length ? "No syncable executors." : "Loading executors…";
+        host.append(empty);
+        return;
+    }
+
+    // With one chosen the rest are noise, same as the website.
+    const chosen = all.find((r) => r.title === p?.exploit_sync);
+    if (chosen) {
+        host.append(exploitPill(chosen, true));
+        return;
+    }
+
+    const shown = pickerExpanded ? all : all.slice(0, 6);
+    shown.forEach((record, index) => {
+        const pill = exploitPill(record, false);
+        pill.style.setProperty("--i", String(Math.min(index, 12)));
+        host.append(pill);
+    });
+
+    const remaining = all.length - shown.length;
+    if (remaining > 0 || pickerExpanded) {
+        const more = document.createElement("button");
+        more.type = "button";
+        more.className = "epill epill--more";
+        more.textContent = pickerExpanded ? "show fewer" : `+${remaining} more`;
+        more.style.setProperty("--i", String(Math.min(shown.length, 12) + 1));
+        more.addEventListener("click", () => { pickerExpanded = !pickerExpanded; renderSettings(); });
+        host.append(more);
+    }
+}
+
+function showOutdated() { $("outdatedModal").hidden = false; }
 
 /* ── Preset fast flags ──────────────────────────────────────── */
 
@@ -331,25 +471,27 @@ function renderSettings() {
 
         pane.append(groupLabel("Version options"));
 
-        /* Exploit sync — pick an executor and the pinned build follows it. */
-        const syncOptions = [{ value: "", label: "None" }].concat(
-            executors
-                .filter((e) => e && e.title && !e.hidden && String(e.rbxversion || "").startsWith("version-"))
-                .map((e) => ({ value: e.title, label: e.title }))
-        );
-        pane.append(row(
+        /* Exploit sync — the same pill picker the website uses. */
+        const pickerHost = document.createElement("div");
+        pickerHost.className = "epills";
+        renderExploitPicker(pickerHost);
+
+        const syncRow = row(
             "Exploit sync",
-            "Pin the Roblox build your chosen executor was made for",
-            select(syncOptions, p?.exploit_sync || "", async (title) => {
-                await patchProfile({ exploit_sync: title || null, pinned_version: null });
-                if (title) await syncToExploit(title);
-            })
-        ));
+            "Pin the Roblox build your chosen executor was made for. Re-checked on every launch.",
+            null
+        );
+        syncRow.classList.add("row--stack");
+        syncRow.querySelector(".row__control").remove();
+        syncRow.append(pickerHost);
+        pane.append(syncRow);
 
         const pinned = p?.pinned_version;
         pane.append(row(
             pinned ? `Pinned to ${pinned}` : "No version pinned",
-            pinned ? "This profile installs exactly this build" : "Tracks the newest build on the channel",
+            pinned
+                ? "This profile installs exactly this build"
+                : "Tracks the newest build on the channel",
             pinned
                 ? button("Unpin", () => patchProfile({ pinned_version: null, exploit_sync: null }))
                 : tag(p?.exploit_sync ? "synced" : "latest", p?.exploit_sync ? "ok" : null)
@@ -444,12 +586,51 @@ function renderSettings() {
             ].filter((n) => n.nodeType !== Node.COMMENT_NODE)
         ));
 
-        const note = document.createElement("p");
-        note.className = "pane__empty";
-        note.textContent =
-            "Server selection, activity watching and Discord Rich Presence aren't implemented — "
-            + "they'd be dead switches, so they're left out rather than shown doing nothing.";
-        pane.append(note);
+        pane.append(row(
+            "Server selection",
+            "Which server a launch joins. Closest sorts Roblox's public server list by reported ping.",
+            select(
+                [
+                    { value: "default", label: "Roblox decides" },
+                    { value: "closest", label: "Closest" },
+                    { value: "random", label: "Random" },
+                ],
+                s.server_mode || "default",
+                (v) => patch({ server_mode: v })
+            )
+        ));
+
+        pane.append(groupLabel("Activity"));
+
+        pane.append(row(
+            "Activity Watcher",
+            "Read Roblox's log files to track your current game session",
+            toggle(s.activity_watcher, (v) => patch({ activity_watcher: v }))
+        ));
+
+        pane.append(row(
+            "Discord Rich Presence",
+            "Show the game you're in on your Discord profile",
+            toggle(s.discord_rpc, (v) => patch({ discord_rpc: v })),
+            { disabled: !s.activity_watcher }
+        ));
+
+        pane.append(row(
+            "Show join buttons",
+            'Add a "See game page" button to your presence',
+            toggle(s.show_join_buttons, (v) => patch({ show_join_buttons: v })),
+            { disabled: !s.activity_watcher || !s.discord_rpc }
+        ));
+
+        if (session) {
+            pane.append(groupLabel("Right now"));
+            pane.append(row(
+                session.name || `Place ${session.place_id}`,
+                session.creator ? `by ${session.creator}` : "In game",
+                tag("in game", "ok")
+            ));
+        }
+
         return;
     }
 
@@ -578,12 +759,11 @@ function renderSettings() {
             toggle(s.auto_check_updates, (v) => patch({ auto_check_updates: v }))
         ));
 
+        const updateBtn = button("Check", () => checkForUpdate(updateBtn, true));
         pane.append(row(
             "Check for updates",
-            "Open the releases page to see if a newer build exists",
-            button("Check", () => {
-                window.__TAURI__.opener.openUrl("https://github.com/dlyrr/santi-weblauncher/releases");
-            })
+            "Download and install a newer santi.weblauncher if one is published",
+            updateBtn
         ));
 
         pane.append(row(
@@ -832,13 +1012,23 @@ function renderMain() {
     $("channelState").textContent = snap.system_channel ? `channel ${snap.system_channel}` : "channel unpinned";
 
     const ready = Boolean(p?.installed_version);
-    $("stageTitle").textContent = ready ? "Ready to launch" : "No build installed";
-    $("stageSub").textContent = ready
-        ? "Head to Roblox.com and join a game to get started"
-        : "Install a Roblox build to get started";
+
+    if (session) {
+        $("stageTitle").textContent = session.name || `Place ${session.place_id}`;
+        $("stageSub").textContent = session.creator ? `Playing — by ${session.creator}` : "Playing";
+    } else {
+        $("stageTitle").textContent = ready ? "Ready to launch" : "No build installed";
+        $("stageSub").textContent = ready
+            ? "Head to Roblox.com and join a game to get started"
+            : "Install a Roblox build to get started";
+    }
 
     $("launchBtn").textContent = ready ? "Launch Roblox" : "Install Roblox";
     $("launchBtn").disabled = busy;
+
+    const sync = p?.exploit_sync;
+    $("syncChip").hidden = !sync;
+    if (sync) $("syncChip").textContent = `sync: ${sync}`;
 }
 
 listen("install-progress", (event) => {
@@ -855,34 +1045,106 @@ $("launchBtn").addEventListener("click", async () => {
 
     busy = true;
     renderMain();
+    $("stageHint").textContent = "";
 
     try {
         if (!p.installed_version) {
-            $("stageHint").textContent = "";
             await invoke("install_profile", { id: p.id, versionOverride: null });
             snap = await invoke("get_snapshot");
             toast("Build installed", "ok");
         } else {
-            const pid = await invoke("launch_profile", { id: p.id, launchArg: null });
+            // launch_flow re-checks the synced executor's build and installs the
+            // right one first, emitting install-progress as it goes.
+            const pid = await invoke("launch_flow", { id: p.id, launchArg: null });
+            snap = await invoke("get_snapshot");
             $("stageHint").textContent = `Roblox started (pid ${pid})`;
+
             if (snap.settings.notify_on_launch) {
                 const { isPermissionGranted, requestPermission, sendNotification } = window.__TAURI__.notification;
                 let granted = await isPermissionGranted();
                 if (!granted) granted = (await requestPermission()) === "granted";
                 if (granted) sendNotification({ title: "santi.weblauncher", body: `Roblox started (pid ${pid})` });
             }
-            snap = await invoke("get_snapshot");
         }
     } catch (err) {
         $("stageHint").textContent = "";
         toast(String(err), "bad");
     } finally {
         busy = false;
-        $("progressLine").hidden = true;
-        $("progressFill").style.width = "0%";
+        setTimeout(() => { $("progressLine").hidden = true; $("progressFill").style.width = "0%"; }, 700);
         renderMain();
         renderSettings();
     }
+});
+
+$("outdatedOk").addEventListener("click", () => { $("outdatedModal").hidden = true; });
+$("outdatedModal").addEventListener("click", (event) => {
+    if (event.target === $("outdatedModal")) $("outdatedModal").hidden = true;
+});
+
+/* ── Updates ────────────────────────────────────────────────── */
+
+/*
+    Signed updates via the Tauri updater. The manifest lives on
+    rdd.xocat.online and each installer is minisign-signed, so an update can
+    only install if it was built with our private key.
+*/
+async function checkForUpdate(btn, interactive) {
+    const { check } = window.__TAURI__.updater;
+    const setLabel = (text) => { if (btn) btn.textContent = text; };
+
+    try {
+        setLabel("Checking…");
+        const update = await check();
+
+        if (!update) {
+            setLabel("Check");
+            if (interactive) toast(`You're on the latest version (v${snap.app_version})`, "ok");
+            return;
+        }
+
+        if (interactive) {
+            const { ask } = window.__TAURI__.dialog;
+            const go = await ask(
+                `Version ${update.version} is available. Install it now? The launcher will restart.`,
+                { title: "Update available", kind: "info", okLabel: "Install", cancelLabel: "Later" }
+            );
+            if (!go) { setLabel("Check"); return; }
+        }
+
+        setLabel("Updating…");
+        $("progressLine").hidden = false;
+        $("progressLabel").textContent = `Downloading v${update.version}…`;
+
+        let total = 0;
+        let received = 0;
+        await update.downloadAndInstall((event) => {
+            if (event.event === "Started") {
+                total = event.data.contentLength || 0;
+            } else if (event.event === "Progress") {
+                received += event.data.chunkLength || 0;
+                const pct = total ? Math.min((received / total) * 100, 100) : 40;
+                $("progressFill").style.width = `${pct}%`;
+            } else if (event.event === "Finished") {
+                $("progressFill").style.width = "100%";
+                $("progressLabel").textContent = "Restarting…";
+            }
+        });
+
+        await window.__TAURI__.process.relaunch();
+    } catch (err) {
+        setLabel("Check");
+        $("progressLine").hidden = true;
+        if (interactive) toast(`Update failed: ${err}`, "bad");
+    }
+}
+
+/* ── Activity ───────────────────────────────────────────────── */
+
+listen("activity", (event) => {
+    session = event.payload || null;
+    renderMain();
+    if (activeTab === "roblox") renderSettings();
 });
 
 /* ── Boot ───────────────────────────────────────────────────── */
@@ -898,12 +1160,26 @@ $("launchBtn").addEventListener("click", async () => {
     applyTheme();
     renderMain();
 
+    await loadLogos();
+
     try {
-        const payload = await invoke("weao_exploits");
-        executors = Array.isArray(payload) ? payload : Object.values(payload || {});
+        const [payload, versions] = await Promise.all([
+            invoke("weao_exploits"),
+            invoke("weao_versions").catch(() => null),
+        ]);
+        const list = Array.isArray(payload) ? payload : Object.values(payload || {});
+        // Keep the API's own order available as a tiebreaker.
+        executors = list.map((entry, index) => ({ ...entry, __pos: index }));
+        liveWindows = versions?.Windows || null;
     } catch {
         executors = [];
     }
 
+    renderMain();
     renderSettings();
+
+    if (snap.settings.auto_check_updates) {
+        // Quiet on startup: only speaks up if an update actually installs.
+        checkForUpdate(null, false);
+    }
 })();
