@@ -8,15 +8,15 @@
 */
 
 :root {
-    --background: #161616;
-    --surface: #1c1e20;
+    --background: #1a1a1a;
+    --surface: #1a1a1a;
     --glass: #ffffff;
-    --text: #e8e8e8;
-    --description: #7a7a7a;
-    --buttons: #999999;
-    --inputs: #bbbbbb;
+    --text: #ffffff;
+    --description: #767676;
+    --buttons: #a3a3a3;
+    --inputs: #d1d1d1;
     --accent: #3bea57;
-    --loading: #ffffff;
+    --loading: #3bea57;
     --danger: #ec3b47;
 
     --line: color-mix(in srgb, var(--glass) 8%, transparent);
@@ -62,6 +62,46 @@ body::before {
         radial-gradient(1px 1px at 26% 78%, color-mix(in srgb, var(--glass) 13%, transparent), transparent),
         radial-gradient(1px 1px at 94% 72%, color-mix(in srgb, var(--glass) 15%, transparent), transparent),
         radial-gradient(1px 1px at 58% 91%, color-mix(in srgb, var(--glass) 12%, transparent), transparent);
+}
+
+/*
+    Theme artwork, carried over from rdd.xocat.online so a preset means the same
+    thing in both places: two tinted radials behind everything, Ball 2.0's tile
+    on every surface, and the falling sprite voxlis.NET and Sirmeme use.
+
+    The site's radials are sized in pixels against a browser window; this one
+    opens at 460×300, so they are sized against the window instead. The glow is
+    painted twice because the settings overlay is opaque and would otherwise
+    cover it.
+*/
+.glow,
+.settings::before {
+    position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    opacity: var(--glow-opacity, 0);
+    background-image:
+        radial-gradient(ellipse 150% 62% at 22% -6%, var(--glow-1, transparent), transparent 68%),
+        radial-gradient(ellipse 135% 58% at 82% 8%, var(--glow-2, transparent), transparent 66%);
+}
+/* z-index 10 on the overlay already scopes this to it. */
+.settings::before { content: ""; }
+
+.theme-rain { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+
+/* Ball 2.0 paints its tile on every surface, which is the whole joke. */
+:root[data-theme="ball20"] body,
+:root[data-theme="ball20"] .settings,
+:root[data-theme="ball20"] .modal__card,
+:root[data-theme="ball20"] .dd,
+:root[data-theme="ball20"] .dd__menu,
+:root[data-theme="ball20"] .toast,
+:root[data-theme="ball20"] .btn,
+:root[data-theme="ball20"] .launch,
+:root[data-theme="ball20"] .field,
+:root[data-theme="ball20"] .pick,
+:root[data-theme="ball20"] .preset,
+:root[data-theme="ball20"] .epill {
+    background-image: var(--tile);
+    background-size: var(--tile-size);
 }
 
 body.has-bg::after {

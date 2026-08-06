@@ -111,15 +111,17 @@ pub struct Theme {
     pub background_image: Option<String>,
 }
 
-fn theme_background() -> String { "#161616".into() }
-fn theme_surface() -> String { "#1c1e20".into() }
+// WEAO's Dark, the same palette rdd.xocat.online opens with. Kept in step with
+// the first entry of WEAO_PRESETS in main.js, which is what "Reset theme" uses.
+fn theme_background() -> String { "#1a1a1a".into() }
+fn theme_surface() -> String { "#1a1a1a".into() }
 fn theme_glass() -> String { "#ffffff".into() }
-fn theme_text() -> String { "#e8e8e8".into() }
-fn theme_description() -> String { "#7a7a7a".into() }
-fn theme_buttons() -> String { "#999999".into() }
-fn theme_inputs() -> String { "#bbbbbb".into() }
+fn theme_text() -> String { "#ffffff".into() }
+fn theme_description() -> String { "#767676".into() }
+fn theme_buttons() -> String { "#a3a3a3".into() }
+fn theme_inputs() -> String { "#d1d1d1".into() }
 fn theme_accent() -> String { "#3bea57".into() }
-fn theme_loading() -> String { "#ffffff".into() }
+fn theme_loading() -> String { "#3bea57".into() }
 fn theme_danger() -> String { "#ec3b47".into() }
 
 impl Default for Theme {

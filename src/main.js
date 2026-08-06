@@ -316,7 +316,8 @@ const FLAG_PRESETS = [
 ];
 
 /*
-    Theme presets imported from WEAO (https://weao.xyz).
+    Theme presets imported from WEAO (https://weao.xyz), the same nine that
+    rdd.xocat.online ships.
 
     WEAO's tokens are mostly translucent, layered over the page background. The
     launcher paints with solid colours and derives its own translucency from
@@ -334,6 +335,37 @@ const WEAO_PRESETS = [
     { id: "sirmeme", name: "Sirmeme", theme: { background: "#000000", surface: "#000000", glass: "#ffffff", text: "#ffffff", description: "#666666", buttons: "#999999", inputs: "#cccccc", accent: "#ff00d8", loading: "#ff00d8", danger: "#35ff03" } },
     { id: "ball20", name: "Ball 2.0", theme: { background: "#ffffff", surface: "#ffffff", glass: "#000000", text: "#000000", description: "#999999", buttons: "#666666", inputs: "#333333", accent: "#000000", loading: "#000000", danger: "#000000" } },
 ];
+
+/*
+    A WEAO theme is more than its palette, and the site paints all of it.
+
+    `glow` is the pair of tinted radials behind the page, `tile` is the artwork
+    Ball 2.0 repeats across every surface, and `rain` is the sprite voxlis.NET
+    and Sirmeme drop down the window. Everything is keyed by preset rather than
+    stored in the theme, so a hand-edited palette is colours and nothing else —
+    and the files are mirrored locally, exactly as they are on the site.
+*/
+const THEME_ARTWORK = {
+    dark:     { glow: ["rgba(59, 234, 87, .5)", "rgba(236, 59, 71, .5)"], glowOpacity: .5 },
+    light:    { glow: ["rgba(59, 234, 87, .5)", "rgba(236, 59, 71, .5)"], glowOpacity: .5 },
+    revision: { glow: ["rgba(224, 108, 117, .5)", "rgba(10, 10, 10, .5)"], glowOpacity: .5 },
+    voxlis:   { glow: ["rgba(220, 38, 38, .5)", "rgba(0, 0, 0, .5)"], glowOpacity: .5,
+                rain: "assets/themes/red-heart.svg", rainSize: 34, rainCount: 46 },
+    pulsery:  { glow: ["rgba(99, 102, 241, .2)", "rgba(99, 102, 241, .2)"], glowOpacity: .2 },
+    amoled:   { glow: ["rgba(80, 80, 80, .5)", "rgba(60, 60, 60, .5)"], glowOpacity: .5 },
+    kyoto:    { glow: ["rgba(209, 217, 249, .5)", "rgba(94, 102, 119, .5)"], glowOpacity: .5 },
+    sirmeme:  { glow: ["rgba(53, 255, 3, .5)", "rgba(255, 0, 216, .5)"], glowOpacity: .5,
+                rain: "assets/themes/sirmeme.png", rainSize: 42, rainCount: 34 },
+    ball20:   { glow: ["rgba(0, 0, 0, .5)", "rgba(0, 0, 0, .5)"], glowOpacity: .5,
+                tile: "assets/themes/ball2.0.png", tileSize: 84 },
+};
+
+/* Which preset a palette is, if it is still one of them untouched. */
+function activePreset(theme) {
+    return WEAO_PRESETS.find(
+        (preset) => Object.entries(preset.theme).every(([key, value]) => theme[key] === value)
+    ) || null;
+}
 
 const THEME_KEYS = [
     ["background", "Background", "Main app background color"],
@@ -995,9 +1027,8 @@ function renderSettings() {
             // A preset only sets colours — grid, scale and background image
             // are the user's own choices and are left alone.
             bind(() => {
-                const t = snap.settings.theme;
-                const match = Object.entries(preset.theme).every(([k, v]) => t[k] === v);
-                chip.setAttribute("aria-pressed", String(match));
+                const active = activePreset(snap.settings.theme);
+                chip.setAttribute("aria-pressed", String(active?.id === preset.id));
             });
 
             chip.addEventListener("click", () => setTheme({ ...preset.theme }));
@@ -1296,13 +1327,108 @@ async function setTheme(changes) {
     syncUI();
 }
 
+/* WEAO's Dark, so a fresh install already matches rdd.xocat.online. */
 function defaultTheme() {
     return {
-        background: "#161616", surface: "#1c1e20", glass: "#ffffff",
-        text: "#e8e8e8", description: "#7a7a7a", buttons: "#999999",
-        inputs: "#bbbbbb", accent: "#3bea57", loading: "#ffffff", danger: "#ec3b47",
+        ...WEAO_PRESETS[0].theme,
         grid_overlay: true, ui_scale: 100, background_image: null,
     };
+}
+
+/* ── Falling-sprite rain ────────────────────────────────────── */
+
+let rainCanvas = null;
+let rainFrame = 0;
+let rainResize = null;
+
+function stopRain() {
+    if (rainFrame) cancelAnimationFrame(rainFrame);
+    rainFrame = 0;
+    if (rainResize) window.removeEventListener("resize", rainResize);
+    rainResize = null;
+    if (rainCanvas) rainCanvas.remove();
+    rainCanvas = null;
+}
+
+function startRain({ rain, rainSize = 36, rainCount = 40 }) {
+    stopRain();
+
+    // Motion is decoration; honour the preference rather than overriding it.
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    const canvas = document.createElement("canvas");
+    canvas.className = "theme-rain";
+    canvas.setAttribute("aria-hidden", "true");
+    document.body.append(canvas);
+    rainCanvas = canvas;
+
+    const context = canvas.getContext("2d");
+    const sprite = new Image();
+    let ready = false;
+    sprite.addEventListener("load", () => { ready = true; });
+    sprite.src = rain;
+
+    // Backing store follows devicePixelRatio so the sprites aren't soft.
+    let ratio = 1;
+    const resize = () => {
+        ratio = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.floor(window.innerWidth * ratio);
+        canvas.height = Math.floor(window.innerHeight * ratio);
+    };
+    resize();
+    rainResize = resize;
+    window.addEventListener("resize", resize);
+
+    /*
+        The counts come from the site, where they fall across a whole browser
+        window. This one opens at 460×300, and 46 hearts in that is a screen of
+        hearts — so the count is scaled by area against a full-size window.
+    */
+    const density = Math.max(0.3, Math.min(1, (window.innerWidth * window.innerHeight) / (1280 * 800)));
+    const drops = Array.from({ length: Math.max(6, Math.round(rainCount * density)) }, () => ({
+        x: Math.random(),
+        y: Math.random(),
+        speed: 0.02 + Math.random() * 0.05,
+        size: rainSize * (0.55 + Math.random() * 0.75),
+        spin: (Math.random() - 0.5) * 1.6,
+        angle: Math.random() * Math.PI * 2,
+        alpha: 0.16 + Math.random() * 0.3,
+    }));
+
+    let last = performance.now();
+
+    const tick = (now) => {
+        // Delta-timed so the fall rate is the same on any refresh rate, and a
+        // window that was hidden in the tray doesn't teleport everything on return.
+        const delta = Math.min((now - last) / 1000, 0.05);
+        last = now;
+
+        context.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (ready) {
+            for (const drop of drops) {
+                drop.y += drop.speed * delta;
+                drop.angle += drop.spin * delta;
+
+                if (drop.y > 1.15) {
+                    drop.y = -0.15;
+                    drop.x = Math.random();
+                }
+
+                const size = drop.size * ratio;
+                context.save();
+                context.globalAlpha = drop.alpha;
+                context.translate(drop.x * canvas.width, drop.y * canvas.height);
+                context.rotate(drop.angle);
+                context.drawImage(sprite, -size / 2, -size / 2, size, size);
+                context.restore();
+            }
+        }
+
+        rainFrame = requestAnimationFrame(tick);
+    };
+
+    rainFrame = requestAnimationFrame(tick);
 }
 
 function applyTheme() {
@@ -1313,6 +1439,20 @@ function applyTheme() {
     for (const [key] of THEME_KEYS) root.style.setProperty(`--${key}`, t[key]);
     root.style.setProperty("--grid-opacity", t.grid_overlay ? "1" : "0");
     root.style.fontSize = `${(t.ui_scale / 100) * 16}px`;
+
+    // Glow, tile and rain belong to a preset, not to the ten colours, so an
+    // edited palette drops all of it and keeps only what it actually set.
+    const preset = activePreset(t);
+    const art = (preset && THEME_ARTWORK[preset.id]) || {};
+
+    root.dataset.theme = preset ? preset.id : "custom";
+    root.style.setProperty("--glow-1", art.glow ? art.glow[0] : "transparent");
+    root.style.setProperty("--glow-2", art.glow ? art.glow[1] : "transparent");
+    root.style.setProperty("--glow-opacity", art.glow ? String(art.glowOpacity ?? 0.5) : "0");
+    root.style.setProperty("--tile", art.tile ? `url("${art.tile}")` : "none");
+    root.style.setProperty("--tile-size", art.tileSize ? `${art.tileSize}px` : "auto");
+
+    if (art.rain) startRain(art); else stopRain();
 
     if (t.background_image) {
         // Inlined as a data URL by the backend, so no asset protocol or

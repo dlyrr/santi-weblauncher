@@ -46,7 +46,7 @@ Every version number and executor status comes from WEAO's [public API](https://
 
 **Runs from the tray.** Closing the window hides it rather than quitting — quit from the tray menu. **Launch on Startup** is on by default, and when it's on a **Start in Tray** option appears so a Windows-initiated start can come up hidden.
 
-**Themeable.** Every colour, the dot-grid overlay, UI scale and a background image are configurable under Settings → Themes.
+**Themeable.** Every colour, the dot-grid overlay, UI scale and a background image are configurable under Settings → Themes. The nine WEAO presets are the same ones [rdd.xocat.online](https://rdd.xocat.online) ships — not just the palettes but the artwork that goes with them: the tinted backdrop glow each theme carries, Ball 2.0's tile across every surface, and the falling sprites on voxlis.NET and Sirmeme. Picking a preset in one place and the other gives you the same launcher and the same site. Editing any colour by hand drops the artwork and leaves you with exactly the colours you set.
 
 **Protocol handling (optional, off by default).** Registers the launcher for `roblox-player:` and `roblox-studio:` links under your user account, so the website's Play button opens games in your pinned build. Reversible from the same toggle.
 
