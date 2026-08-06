@@ -21,6 +21,22 @@ const STUDIO_CHANNEL_KEY: &str = r"SOFTWARE\ROBLOX Corporation\Environments\Robl
 #[cfg(windows)]
 const PROTOCOL_KEY: &str = r"Software\Classes\roblox-player";
 
+#[cfg(windows)]
+const PROTOCOL_KEY_ALT: &str = r"Software\Classes\roblox";
+
+#[cfg(windows)]
+const STUDIO_PROTOCOL_KEY: &str = r"Software\Classes\roblox-studio";
+
+#[cfg(windows)]
+const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+
+#[cfg(windows)]
+const RUN_VALUE: &str = "santi.weblauncher";
+
+/// Flag passed to our own executable by the autostart entry so the launcher
+/// knows it was started by Windows and may need to stay in the tray.
+pub const TRAY_ARG: &str = "--tray";
+
 /// Read the channel Roblox is currently pinned to, if any.
 #[cfg(windows)]
 pub fn read_channel() -> Result<Option<String>> {
@@ -194,20 +210,10 @@ pub fn launch(install_dir: &Path, binary_type: BinaryType, launch_arg: Option<&s
 /// [`unregister_protocol`].
 #[cfg(windows)]
 pub fn register_protocol(exe: &Path) -> Result<()> {
-    use winreg::enums::HKEY_CURRENT_USER;
-    use winreg::RegKey;
-
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu.create_subkey(PROTOCOL_KEY)?;
-    key.set_value("", &"URL:Roblox Protocol")?;
-    key.set_value("URL Protocol", &"")?;
-
-    let (icon, _) = hkcu.create_subkey(format!(r"{PROTOCOL_KEY}\DefaultIcon"))?;
-    icon.set_value("", &format!("{},0", exe.display()))?;
-
-    let (command, _) = hkcu.create_subkey(format!(r"{PROTOCOL_KEY}\shell\open\command"))?;
-    command.set_value("", &format!("\"{}\" \"%1\"", exe.display()))?;
-
+    // The website emits roblox-player: links, but roblox: is still used in
+    // places; taking both avoids a half-captured handoff.
+    write_protocol_key(exe, PROTOCOL_KEY, "URL:Roblox Protocol")?;
+    write_protocol_key(exe, PROTOCOL_KEY_ALT, "URL:Roblox Protocol")?;
     Ok(())
 }
 
@@ -225,11 +231,14 @@ pub fn unregister_protocol() -> Result<()> {
     use winreg::RegKey;
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    match hkcu.delete_subkey_all(PROTOCOL_KEY) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(err).context("removing the roblox-player protocol key"),
+    for key_path in [PROTOCOL_KEY, PROTOCOL_KEY_ALT] {
+        match hkcu.delete_subkey_all(key_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err).context("removing a Roblox protocol key"),
+        }
     }
+    Ok(())
 }
 
 #[cfg(not(windows))]
@@ -237,21 +246,155 @@ pub fn unregister_protocol() -> Result<()> {
     Ok(())
 }
 
-/// Whether *we* currently own the protocol handler.
 #[cfg(windows)]
-pub fn owns_protocol(exe: &Path) -> bool {
+fn owns_key(exe: &Path, key_path: &str) -> bool {
     use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
     use winreg::RegKey;
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    hkcu.open_subkey_with_flags(format!(r"{PROTOCOL_KEY}\shell\open\command"), KEY_READ)
+    hkcu.open_subkey_with_flags(format!(r"{key_path}\shell\open\command"), KEY_READ)
         .ok()
         .and_then(|key| key.get_value::<String, _>("").ok())
         .map(|command| command.contains(&exe.display().to_string()))
         .unwrap_or(false)
 }
 
+/// Whether *some* handler is registered for a protocol, ours or not. The
+/// Protocol tab distinguishes "registered to this launcher" (green) from
+/// "another bootstrapper is registered" (amber).
+#[cfg(windows)]
+fn key_registered(key_path: &str) -> bool {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ};
+    use winreg::RegKey;
+
+    let command = format!(r"{key_path}\shell\open\command");
+    RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey_with_flags(&command, KEY_READ)
+        .or_else(|_| {
+            // Roblox's own installer registers machine-wide.
+            RegKey::predef(HKEY_LOCAL_MACHINE)
+                .open_subkey_with_flags(command.replace("Software\\Classes", "Software\\Classes"), KEY_READ)
+        })
+        .is_ok()
+}
+
+/// Registration state for both protocols: (ours, registered-at-all).
+#[cfg(windows)]
+pub fn protocol_state(exe: &Path) -> ((bool, bool), (bool, bool)) {
+    (
+        (owns_key(exe, PROTOCOL_KEY), key_registered(PROTOCOL_KEY)),
+        (owns_key(exe, STUDIO_PROTOCOL_KEY), key_registered(STUDIO_PROTOCOL_KEY)),
+    )
+}
+
 #[cfg(not(windows))]
-pub fn owns_protocol(_exe: &Path) -> bool {
+pub fn protocol_state(_exe: &Path) -> ((bool, bool), (bool, bool)) {
+    ((false, false), (false, false))
+}
+
+/// Register for `roblox-studio:` links.
+#[cfg(windows)]
+pub fn register_studio_protocol(exe: &Path) -> Result<()> {
+    write_protocol_key(exe, STUDIO_PROTOCOL_KEY, "URL:Roblox Studio Protocol")
+}
+
+#[cfg(not(windows))]
+pub fn register_studio_protocol(_exe: &Path) -> Result<()> {
+    bail!("Protocol registration is only available on Windows")
+}
+
+#[cfg(windows)]
+pub fn unregister_studio_protocol() -> Result<()> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    match RegKey::predef(HKEY_CURRENT_USER).delete_subkey_all(STUDIO_PROTOCOL_KEY) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).context("removing the roblox-studio protocol key"),
+    }
+}
+
+#[cfg(not(windows))]
+pub fn unregister_studio_protocol() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn write_protocol_key(exe: &Path, key_path: &str, label: &str) -> Result<()> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hkcu.create_subkey(key_path)?;
+    key.set_value("", &label)?;
+    key.set_value("URL Protocol", &"")?;
+
+    let (icon, _) = hkcu.create_subkey(format!(r"{key_path}\DefaultIcon"))?;
+    icon.set_value("", &format!("{},0", exe.display()))?;
+
+    let (command, _) = hkcu.create_subkey(format!(r"{key_path}\shell\open\command"))?;
+    command.set_value("", &format!("\"{}\" \"%1\"", exe.display()))?;
+
+    Ok(())
+}
+
+/* ── Start with Windows ─────────────────────────────────────── */
+
+/// Add or remove the HKCU Run entry. When `in_tray` is set the entry carries
+/// `--tray`, so a Windows-initiated start can come up hidden while launching the
+/// app by hand still shows the window.
+#[cfg(windows)]
+pub fn set_autostart(enabled: bool, in_tray: bool) -> Result<()> {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_ALL_ACCESS};
+    use winreg::RegKey;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hkcu.create_subkey(RUN_KEY).context("opening the Run key")?;
+
+    if !enabled {
+        if let Ok(writable) = hkcu.open_subkey_with_flags(RUN_KEY, KEY_ALL_ACCESS) {
+            let _ = writable.delete_value(RUN_VALUE);
+        }
+        return Ok(());
+    }
+
+    let exe = std::env::current_exe().context("locating our own executable")?;
+    let command = if in_tray {
+        format!("\"{}\" {TRAY_ARG}", exe.display())
+    } else {
+        format!("\"{}\"", exe.display())
+    };
+
+    key.set_value(RUN_VALUE, &command).context("writing the Run entry")?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn set_autostart(_enabled: bool, _in_tray: bool) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn autostart_enabled() -> bool {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
+    use winreg::RegKey;
+
+    RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey_with_flags(RUN_KEY, KEY_READ)
+        .ok()
+        .and_then(|key| key.get_value::<String, _>(RUN_VALUE).ok())
+        .is_some()
+}
+
+#[cfg(not(windows))]
+pub fn autostart_enabled() -> bool {
     false
+}
+
+/// Roblox's install directory, for the "open installation folder" action.
+pub fn roblox_root() -> Option<PathBuf> {
+    let local = dirs::data_local_dir()?;
+    let path = local.join("Roblox");
+    path.is_dir().then_some(path)
 }

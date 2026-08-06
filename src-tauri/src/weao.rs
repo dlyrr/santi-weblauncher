@@ -44,14 +44,31 @@ pub async fn current_versions(client: &reqwest::Client) -> Result<Value> {
     get(client, "versions/current").await
 }
 
-pub async fn future_versions(client: &reqwest::Client) -> Result<Value> {
-    get(client, "versions/future").await
-}
-
-pub async fn past_versions(client: &reqwest::Client) -> Result<Value> {
-    get(client, "versions/past").await
-}
-
 pub async fn exploits(client: &reqwest::Client) -> Result<Value> {
     get(client, "status/exploits").await
+}
+
+/// The Roblox build a named executor targets, if it's a desktop one.
+///
+/// Android and iOS entries report a dotted build number rather than a
+/// `version-…` hash; those aren't published on the desktop CDN, so they're not
+/// something this launcher can install.
+pub fn target_version_for(payload: &Value, title: &str) -> Option<String> {
+    let entries: Vec<&Value> = match payload {
+        Value::Array(items) => items.iter().collect(),
+        Value::Object(map) => map.values().collect(),
+        _ => return None,
+    };
+
+    entries
+        .into_iter()
+        .find(|entry| {
+            entry["title"]
+                .as_str()
+                .map(|value| value.eq_ignore_ascii_case(title.trim()))
+                .unwrap_or(false)
+        })
+        .and_then(|entry| entry["rbxversion"].as_str())
+        .filter(|version| version.starts_with("version-"))
+        .map(str::to_string)
 }

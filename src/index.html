@@ -8,274 +8,66 @@
 </head>
 <body>
 
-<div class="shell">
+<!-- ── Main launcher ──────────────────────────────────────────── -->
+<div class="app" id="app">
 
-    <!-- ── Rail: profiles ─────────────────────────────────── -->
-    <aside class="rail">
-        <div class="rail__brand">
-            <svg class="rail__mark" viewBox="0 0 32 32" aria-hidden="true">
-                <rect x="1" y="1" width="30" height="30" rx="7"/>
+    <header class="titlebar" data-tauri-drag-region>
+        <div class="titlebar__left" data-tauri-drag-region>
+            <svg class="titlebar__mark" viewBox="0 0 32 32" aria-hidden="true">
+                <rect x="1" y="1" width="30" height="30" rx="8"/>
                 <path d="M16 7v13m0 0-5-5m5 5 5-5M8 24h16"/>
             </svg>
-            <div>
-                <div class="rail__name">santi<span>.weblauncher</span></div>
-                <div class="rail__version">v1.0.0</div>
-            </div>
+            <span class="titlebar__title" data-tauri-drag-region>santi.weblauncher</span>
         </div>
-
-        <div class="rail__section">
-            <span class="rail__label">Profiles</span>
-            <button class="rail__add" id="addProfile" type="button" title="New profile" aria-label="New profile">+</button>
+        <div class="titlebar__actions">
+            <button class="iconbtn" id="openSettings" title="Settings" aria-label="Settings">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 10.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Zm6.2-1.6.9.7c.2.2.2.4.1.6l-1.2 2c-.1.2-.4.3-.6.2l-1.1-.4a4.9 4.9 0 0 1-1.2.7l-.2 1.2c0 .2-.2.4-.5.4h-2.4c-.2 0-.4-.2-.5-.4l-.2-1.2a4.9 4.9 0 0 1-1.2-.7l-1.1.4c-.2.1-.5 0-.6-.2l-1.2-2c-.1-.2-.1-.4.1-.6l.9-.7a5 5 0 0 1 0-1.4l-.9-.7c-.2-.2-.2-.4-.1-.6l1.2-2c.1-.2.4-.3.6-.2l1.1.4c.4-.3.8-.5 1.2-.7l.2-1.2c.1-.2.3-.4.5-.4h2.4c.3 0 .5.2.5.4l.2 1.2c.4.2.8.4 1.2.7l1.1-.4c.2-.1.5 0 .6.2l1.2 2c.1.2.1.4-.1.6l-.9.7a5 5 0 0 1 0 1.4Z"/></svg>
+            </button>
+            <button class="iconbtn iconbtn--close" id="closeApp" title="Close to tray" aria-label="Close to tray">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M4.5 4.5l7 7m0-7l-7 7"/></svg>
+            </button>
         </div>
+    </header>
 
-        <nav class="profiles" id="profileList" aria-label="Install profiles"></nav>
+    <main class="stage">
+        <div class="stage__inner">
+            <h1 class="stage__title" id="stageTitle">Ready to launch</h1>
+            <p class="stage__sub" id="stageSub">Head to Roblox.com and join a game to get started</p>
 
-        <div class="rail__foot">
-            <div class="sysline" id="sysChannel" title="The release channel Roblox is currently pinned to">
-                <span class="sysline__dot"></span>
-                <span class="sysline__text">Checking channel…</span>
+            <div class="progressline" id="progressLine" hidden>
+                <div class="progressline__track"><div class="progressline__fill" id="progressFill"></div></div>
+                <p class="progressline__label" id="progressLabel"></p>
             </div>
-            <a class="rail__link" href="https://rdd.xocat.online" data-external>Open rdd.xocat.online</a>
-        </div>
-    </aside>
 
-    <!-- ── Main ───────────────────────────────────────────── -->
-    <main class="main">
+            <div class="rule"><span>or</span></div>
 
-        <header class="topbar">
-            <nav class="tabs" role="tablist">
-                <button class="tab is-active" data-tab="launch" role="tab">Launch</button>
-                <button class="tab" data-tab="builds" role="tab">Builds</button>
-                <button class="tab" data-tab="executors" role="tab">Executors</button>
-                <button class="tab" data-tab="flags" role="tab">Fast flags</button>
-                <button class="tab" data-tab="settings" role="tab">Settings</button>
-            </nav>
-            <div class="topbar__right">
-                <span class="livechip" id="liveChip" title="Live Roblox version, from WEAO">—</span>
-            </div>
-        </header>
-
-        <div class="panes">
-
-            <!-- Launch -->
-            <section class="pane is-active" data-pane="launch">
-                <div class="hero">
-                    <div class="hero__meta">
-                        <span class="hero__eyebrow" id="heroProfile">Default</span>
-                        <h1 class="hero__title" id="heroVersion">No build installed</h1>
-                        <p class="hero__sub" id="heroSub">Install a build to get started.</p>
-                    </div>
-
-                    <div class="hero__actions">
-                        <button class="btn btn--primary btn--big" id="launchBtn" disabled>
-                            <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M4.5 2.7c0-.6.65-.97 1.16-.66l7.2 4.3a.77.77 0 0 1 0 1.32l-7.2 4.3A.77.77 0 0 1 4.5 11.3V2.7Z"/></svg>
-                            Launch
-                        </button>
-                        <button class="btn" id="installBtn">Install / update</button>
-                    </div>
-                </div>
-
-                <div class="statusbar" id="statusBar" hidden>
-                    <div class="statusbar__track"><div class="statusbar__fill" id="statusFill"></div></div>
-                    <div class="statusbar__meta">
-                        <span id="statusMessage">Working…</span>
-                        <span class="mono" id="statusCount"></span>
-                    </div>
-                </div>
-
-                <div class="cards">
-                    <div class="card">
-                        <span class="card__label">Channel</span>
-                        <div class="card__row">
-                            <input class="input input--flush" id="profileChannel" spellcheck="false" placeholder="LIVE">
-                        </div>
-                        <p class="card__hint">The deployment channel this profile installs from.</p>
-                    </div>
-
-                    <div class="card">
-                        <span class="card__label">Version</span>
-                        <div class="card__row">
-                            <input class="input input--flush input--mono" id="profileVersion" spellcheck="false" placeholder="track latest">
-                            <button class="mini" id="resolveBtn" type="button">latest</button>
-                        </div>
-                        <p class="card__hint">Blank tracks the newest build. Pin a hash to downgrade.</p>
-                    </div>
-
-                    <div class="card">
-                        <span class="card__label">Launch URI</span>
-                        <div class="card__row">
-                            <input class="input input--flush input--mono" id="launchArg" spellcheck="false" placeholder="roblox-player:… (optional)">
-                        </div>
-                        <p class="card__hint">Paste a Play-button link to join a game. Blank opens the client.</p>
-                    </div>
-                </div>
-
-                <div class="log" id="log" aria-live="polite"></div>
-            </section>
-
-            <!-- Builds -->
-            <section class="pane" data-pane="builds">
-                <div class="pane__head">
-                    <div>
-                        <h2 class="pane__title">Installed builds</h2>
-                        <p class="pane__sub">Every build on disk for this profile. Old builds stay put so downgrading is instant.</p>
-                    </div>
-                    <button class="btn btn--small" id="refreshBuilds" type="button">Refresh</button>
-                </div>
-                <div class="buildlist" id="buildList"></div>
-
-                <div class="pane__head pane__head--tight">
-                    <div>
-                        <h2 class="pane__title">Roblox's own installs</h2>
-                        <p class="pane__sub">What the official bootstrapper has on disk. Read-only — we never touch these.</p>
-                    </div>
-                </div>
-                <div class="buildlist" id="officialList"></div>
-            </section>
-
-            <!-- Executors -->
-            <section class="pane" data-pane="executors">
-                <div class="pane__head">
-                    <div>
-                        <h2 class="pane__title">Executor compatibility</h2>
-                        <p class="pane__sub">
-                            From <a href="https://weao.xyz" data-external>WEAO</a>. If one is behind the live build,
-                            install the version it targets and it should work again.
-                        </p>
-                    </div>
-                    <input class="input input--search" id="execSearch" type="search" placeholder="Filter…">
-                </div>
-                <div class="execlist" id="execList"></div>
-            </section>
-
-            <!-- Fast flags -->
-            <section class="pane" data-pane="flags">
-                <div class="pane__head">
-                    <div>
-                        <h2 class="pane__title">Fast flags</h2>
-                        <p class="pane__sub">
-                            Written to <code>ClientSettings/ClientAppSettings.json</code> in this profile's install.
-                            Must be a JSON object. Applied on the next launch.
-                        </p>
-                    </div>
-                    <div class="pane__tools">
-                        <button class="btn btn--small" id="reloadFlags" type="button">Reload from disk</button>
-                        <button class="btn btn--small btn--primary" id="saveFlags" type="button">Save</button>
-                    </div>
-                </div>
-                <textarea class="editor" id="flagEditor" spellcheck="false" autocapitalize="off" autocomplete="off">{}</textarea>
-                <p class="editor__status" id="flagStatus"></p>
-            </section>
-
-            <!-- Settings -->
-            <section class="pane" data-pane="settings">
-                <div class="pane__head">
-                    <div>
-                        <h2 class="pane__title">Settings</h2>
-                        <p class="pane__sub">System-level changes. Both are reversible from here.</p>
-                    </div>
-                </div>
-
-                <div class="setting">
-                    <label class="toggle">
-                        <input type="checkbox" id="pinChannel">
-                        <span class="toggle__track"><span class="toggle__thumb"></span></span>
-                    </label>
-                    <div class="setting__body">
-                        <h3 class="setting__title">Pin the Roblox release channel</h3>
-                        <p class="setting__text">
-                            Writes the channel below to Roblox's own registry key and re-applies it on every
-                            launch. Roblox otherwise reassigns you to A/B channels on its own schedule, which
-                            is what breaks executors mid-session. Turning this off deletes the key and hands
-                            channel selection back to Roblox.
-                        </p>
-                        <div class="setting__row">
-                            <input class="input input--tight" id="pinnedChannel" value="LIVE" spellcheck="false">
-                            <button class="btn btn--small" id="applyChannel" type="button">Apply</button>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="setting">
-                    <label class="toggle">
-                        <input type="checkbox" id="protocolHandler">
-                        <span class="toggle__track"><span class="toggle__thumb"></span></span>
-                    </label>
-                    <div class="setting__body">
-                        <h3 class="setting__title">Handle <code>roblox-player:</code> links</h3>
-                        <p class="setting__text">
-                            Routes the website's Play button through this launcher, so games open in your
-                            pinned build instead of Roblox's. Registered under your user account only —
-                            switching it off restores the previous handler.
-                        </p>
-                    </div>
-                </div>
-
-                <div class="setting setting--plain">
-                    <div class="setting__body">
-                        <h3 class="setting__title">Data directory</h3>
-                        <p class="setting__text mono" id="dataDir">—</p>
-                    </div>
-                </div>
-
-                <div class="setting setting--plain">
-                    <div class="setting__body">
-                        <h3 class="setting__title">Delete this profile</h3>
-                        <p class="setting__text">
-                            Removes <strong id="deleteProfileName">the active profile</strong> and every build
-                            installed under it. Roblox's own installs are untouched.
-                        </p>
-                        <div class="setting__row">
-                            <button class="btn btn--small btn--danger" id="deleteProfile" type="button">Delete profile</button>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="notice">
-                    <h3 class="notice__title">Not included</h3>
-                    <p>
-                        MAC address spoofing, MachineGuid randomisation and cookie wiping are deliberately
-                        left out. Those exist to evade account bans rather than to launch a game, so they
-                        are out of scope for this tool.
-                    </p>
-                </div>
-
-                <div class="credits">
-                    <h3 class="credits__title">Credits</h3>
-                    <ul>
-                        <li><strong>SirMeme</strong> — <a href="https://exploitstrap.com/" data-external>ExploitStrap</a> / MrExLiveChannelForcer, the launcher this takes its behaviour from.</li>
-                        <li><strong>Latte Softworks</strong> — <a href="https://github.com/latte-soft/rdd" data-external>RDD</a>, whose deployment logic and extraction roots the installer is a Rust port of. MIT.</li>
-                        <li><strong>WEAO</strong> — <a href="https://weao.xyz" data-external>What Exploits Are Online</a>, all version and executor data.</li>
-                        <li><strong>Bloxstrap</strong> — the project ExploitStrap itself forks from.</li>
-                    </ul>
-                    <p class="credits__note">Not affiliated with or endorsed by Roblox Corporation.</p>
-                </div>
-            </section>
-
+            <button class="launch" id="launchBtn">Launch Roblox</button>
+            <p class="stage__hint" id="stageHint"></p>
         </div>
     </main>
+
+    <footer class="statusbar">
+        <span class="chip" id="versionChip">v1.0.0</span>
+        <span class="statusbar__version mono" id="buildVersion">no build installed</span>
+        <span class="statusbar__spacer"></span>
+        <span class="statusbar__channel mono" id="channelState"></span>
+    </footer>
 </div>
 
-<dialog class="modal" id="profileDialog">
-    <form method="dialog" class="modal__body" id="profileForm">
-        <h2 class="modal__title">New profile</h2>
-        <p class="modal__sub">A profile is one managed install with its own channel, version and flags.</p>
+<!-- ── Settings ───────────────────────────────────────────────── -->
+<div class="settings" id="settings" hidden>
+    <header class="settings__head" data-tauri-drag-region>
+        <h2 class="settings__title" data-tauri-drag-region>Settings</h2>
+        <button class="iconbtn" id="closeSettings" title="Close" aria-label="Close settings">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M4.5 4.5l7 7m0-7l-7 7"/></svg>
+        </button>
+    </header>
 
-        <label class="modal__label" for="newProfileName">Name</label>
-        <input class="input" id="newProfileName" value="Executor" maxlength="40" required>
-
-        <label class="modal__label" for="newProfileType">Client</label>
-        <select class="input" id="newProfileType">
-            <option value="WindowsPlayer">Roblox Player</option>
-            <option value="WindowsStudio64">Roblox Studio</option>
-        </select>
-
-        <div class="modal__actions">
-            <button class="btn" value="cancel" formnovalidate type="submit">Cancel</button>
-            <button class="btn btn--primary" value="create" type="submit">Create</button>
-        </div>
-    </form>
-</dialog>
+    <div class="settings__body">
+        <nav class="rail" id="settingsRail" aria-label="Settings sections"></nav>
+        <div class="pane" id="settingsPane" tabindex="0"></div>
+    </div>
+</div>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 

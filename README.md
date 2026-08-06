@@ -14,7 +14,11 @@ Windows 10/11. Tauri v2 (Rust + a plain HTML/CSS/JS frontend, no framework).
 
 The launcher this takes its behaviour from: LIVE-channel locking, per-executor profiles, and version pinning for downgrades. ExploitStrap is itself a fork of [Bloxstrap](https://github.com/bloxstraplabs/bloxstrap), which deserves equal credit for establishing what a third-party Roblox bootstrapper does at all.
 
-**The UI here is entirely original** — none of ExploitStrap's layout, visual design or assets were copied. Only the problem it solves was.
+None of ExploitStrap's layout, visual design or assets were copied — only the problem it solves.
+
+### WEAO RDD Launcher — design reference
+
+The current UI follows [WEAO RDD Launcher](https://rdd.weao.gg): a compact launch window, and a settings view with an icon rail (Launch, Roblox, FFlags, Protocol, Themes, Advanced) over title/description setting rows. That layout was supplied as the design reference. No code or assets were taken.
 
 ### Latte Softworks — [RDD](https://github.com/latte-soft/rdd)
 
@@ -36,15 +40,23 @@ Every version number and executor status comes from WEAO's [public API](https://
 
 **Version pinning and downgrades.** Pin any `version-…` hash, or leave it blank to track the newest build on the channel. Previously installed builds stay on disk, so switching back is instant rather than a re-download.
 
-**Executor compatibility.** The Executors tab lists what WEAO tracks, sorted by whether each one targets the live Roblox build. Anything behind gets an **Install this build** button that pins and installs the version it was compiled against.
+**Exploit sync.** Pick an executor in Settings → Launch and the profile pins whatever Roblox build that executor was compiled against, so you land on a version it actually works with. Mobile-only executors are excluded — their builds aren't published on the desktop CDN.
 
-**Fast flags.** A JSON editor writing `ClientSettings/ClientAppSettings.json` into the profile's install, validated before it is saved.
+**Fast flags.** A preset list plus a custom editor and JSON import, writing `ClientSettings/ClientAppSettings.json` into the profile's install. An FPS cap set under Roblox is merged in on top.
 
-**Protocol handling (optional, off by default).** Registers the launcher for `roblox-player:` links under your user account, so the website's Play button opens games in your pinned build. Reversible from the same toggle.
+**Runs from the tray.** Closing the window hides it rather than quitting — quit from the tray menu. **Launch on Startup** is on by default, and when it's on a **Start in Tray** option appears so a Windows-initiated start can come up hidden.
+
+**Themeable.** Every colour, the dot-grid overlay, UI scale and a background image are configurable under Settings → Themes.
+
+**Protocol handling (optional, off by default).** Registers the launcher for `roblox-player:` and `roblox-studio:` links under your user account, so the website's Play button opens games in your pinned build. Reversible from the same toggle.
 
 ## What it deliberately does not do
 
 MrExLiveChannelForcer bundles "BanAsync" utilities — MAC address spoofing, MachineGuid randomisation and selective cookie wiping. Those are omitted here. They exist to evade account-level enforcement rather than to launch a game, which is outside what this tool is for.
+
+Server selection, activity watching and Discord Rich Presence are also absent. They'd need log tailing and a Discord IPC client; rather than ship switches that quietly do nothing, they're left out until they're actually built.
+
+Every fast flag in the presets list is one whose name is established. A plausible-looking but wrong flag name produces a control that silently has no effect, so the list is shorter than it could be rather than padded.
 
 ## Building
 
@@ -55,6 +67,8 @@ npm run build    # tauri build -> NSIS installer
 ```
 
 Needs a Rust toolchain and WebView2 (preinstalled on Windows 11). Output lands in `src-tauri/target/release/bundle/nsis/`.
+
+The UI is a small launch window that grows into a settings view with an icon rail — Launch, Roblox, FFlags, Protocol, Themes, Advanced. That layout follows the WEAO RDD Launcher, which the author supplied as the design reference.
 
 The produced installer is **unsigned**, so SmartScreen will warn on first run. Code signing certificates cost money; if that bothers you, build it yourself from source — that's why it's here.
 
@@ -68,7 +82,7 @@ src/                     frontend (no framework, no build step)
 src-tauri/src/
   lib.rs                 Tauri commands and app state
   deploy.rs              CDN download + extraction (Rust port of RDD)
-  roblox.rs              registry channel, FFlags, launching, protocol handler
+  roblox.rs              registry channel, FFlags, launching, protocol, autostart
   config.rs              profiles and settings persistence
   weao.rs                WEAO API client
 ```

@@ -3,7 +3,7 @@
 //! A profile is one managed Roblox install: its own channel, its own pinned
 //! version and its own FFlag overrides. That separation is the point — you can
 //! hold one profile on an older build for an executor that hasn't updated while
-//! another tracks LIVE for actually playing.
+//! another tracks LIVE.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,9 @@ pub struct Profile {
     pub installed_version: Option<String>,
     #[serde(default)]
     pub fflags: Map<String, Value>,
+    /// Executor title to keep this profile's pinned version in step with.
+    #[serde(default)]
+    pub exploit_sync: Option<String>,
 }
 
 fn default_binary_type() -> BinaryType {
@@ -36,6 +39,22 @@ fn default_binary_type() -> BinaryType {
 
 fn default_channel() -> String {
     "LIVE".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_fps_cap() -> u32 {
+    240
+}
+
+fn default_launch_delay() -> u32 {
+    3
+}
+
+fn default_ui_scale() -> u32 {
+    100
 }
 
 impl Profile {
@@ -48,6 +67,7 @@ impl Profile {
             pinned_version: None,
             installed_version: None,
             fflags: Map::new(),
+            exploit_sync: None,
         }
     }
 
@@ -58,21 +78,118 @@ impl Profile {
     }
 }
 
+/// Colours and chrome for the launcher itself. Stored as hex strings and handed
+/// straight to CSS custom properties.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Theme {
+    #[serde(default = "theme_background")]
+    pub background: String,
+    #[serde(default = "theme_surface")]
+    pub surface: String,
+    #[serde(default = "theme_glass")]
+    pub glass: String,
+    #[serde(default = "theme_text")]
+    pub text: String,
+    #[serde(default = "theme_description")]
+    pub description: String,
+    #[serde(default = "theme_buttons")]
+    pub buttons: String,
+    #[serde(default = "theme_inputs")]
+    pub inputs: String,
+    #[serde(default = "theme_accent")]
+    pub accent: String,
+    #[serde(default = "theme_loading")]
+    pub loading: String,
+    #[serde(default = "theme_danger")]
+    pub danger: String,
+    #[serde(default = "default_true")]
+    pub grid_overlay: bool,
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: u32,
+    #[serde(default)]
+    pub background_image: Option<String>,
+}
+
+fn theme_background() -> String { "#161616".into() }
+fn theme_surface() -> String { "#1c1e20".into() }
+fn theme_glass() -> String { "#ffffff".into() }
+fn theme_text() -> String { "#e8e8e8".into() }
+fn theme_description() -> String { "#7a7a7a".into() }
+fn theme_buttons() -> String { "#999999".into() }
+fn theme_inputs() -> String { "#bbbbbb".into() }
+fn theme_accent() -> String { "#3bea57".into() }
+fn theme_loading() -> String { "#ffffff".into() }
+fn theme_danger() -> String { "#ec3b47".into() }
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self {
+            background: theme_background(),
+            surface: theme_surface(),
+            glass: theme_glass(),
+            text: theme_text(),
+            description: theme_description(),
+            buttons: theme_buttons(),
+            inputs: theme_inputs(),
+            accent: theme_accent(),
+            loading: theme_loading(),
+            danger: theme_danger(),
+            grid_overlay: true,
+            ui_scale: default_ui_scale(),
+            background_image: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub profiles: Vec<Profile>,
     #[serde(default)]
     pub active_profile: Option<String>,
+
+    /* ── Launch ── */
+    #[serde(default = "default_true")]
+    pub bootstrapper: bool,
+    #[serde(default)]
+    pub studio_bootstrapper: bool,
+    /// Resolve versions straight from Roblox rather than through WEAO.
+    #[serde(default)]
+    pub use_roblox_cdn: bool,
+    #[serde(default = "default_true")]
+    pub multi_instance: bool,
+    #[serde(default)]
+    pub prompt_on_new_instance: bool,
+    #[serde(default)]
+    pub launch_delay_enabled: bool,
+    #[serde(default = "default_launch_delay")]
+    pub launch_delay_seconds: u32,
+    #[serde(default = "default_true")]
+    pub notify_on_launch: bool,
+    /// Start the launcher with Windows. On by default, per request.
+    #[serde(default = "default_true")]
+    pub launch_on_startup: bool,
+    /// Only meaningful while `launch_on_startup` is set.
+    #[serde(default)]
+    pub start_in_tray: bool,
     /// Whether to hold Roblox on a fixed release channel.
     #[serde(default = "default_true")]
     pub pin_channel: bool,
     #[serde(default = "default_channel")]
     pub pinned_channel: String,
-}
 
-fn default_true() -> bool {
-    true
+    /* ── Roblox ── */
+    #[serde(default)]
+    pub fps_cap_enabled: bool,
+    #[serde(default = "default_fps_cap")]
+    pub fps_cap: u32,
+
+    /* ── Advanced ── */
+    #[serde(default = "default_true")]
+    pub auto_check_updates: bool,
+
+    #[serde(default)]
+    pub theme: Theme,
 }
 
 impl Default for Settings {
@@ -85,8 +202,22 @@ impl Default for Settings {
         Self {
             active_profile: Some(profile.id.clone()),
             profiles: vec![profile],
+            bootstrapper: true,
+            studio_bootstrapper: false,
+            use_roblox_cdn: false,
+            multi_instance: true,
+            prompt_on_new_instance: false,
+            launch_delay_enabled: false,
+            launch_delay_seconds: default_launch_delay(),
+            notify_on_launch: true,
+            launch_on_startup: true,
+            start_in_tray: false,
             pin_channel: true,
             pinned_channel: default_channel(),
+            fps_cap_enabled: false,
+            fps_cap: default_fps_cap(),
+            auto_check_updates: true,
+            theme: Theme::default(),
         }
     }
 }
@@ -118,6 +249,19 @@ impl Settings {
             .map(|n| format!("{base}-{n}"))
             .find(|candidate| self.profile(candidate).is_none())
             .expect("an unused id always exists")
+    }
+
+    /// FFlags that come from settings rather than the user's own list. These are
+    /// merged over the profile's flags when writing ClientAppSettings.json.
+    pub fn derived_fflags(&self) -> Map<String, Value> {
+        let mut flags = Map::new();
+        if self.fps_cap_enabled {
+            flags.insert(
+                "DFIntTaskSchedulerTargetFps".to_string(),
+                Value::String(self.fps_cap.to_string()),
+            );
+        }
+        flags
     }
 }
 
